@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chimera Cortex: An Omni-Context Knowledge Engine</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header / Nav -->
+        <header class="navbar glass">
+            <div class="logo">
+                <span class="logo-icon">🧬</span>
+                <h1>Chimera Cortex: <span class="accent-text">Omni-Context Knowledge Engine</span></h1>
+            </div>
+            <div class="health-monitors">
+                <div class="monitor" id="status-mysql">
+                    <span class="dot red-glow"></span> MySQL
+                </div>
+                <div class="monitor" id="status-minio">
+                    <span class="dot red-glow"></span> MinIO
+                </div>
+                <div class="monitor" id="status-redis">
+                    <span class="dot red-glow"></span> Redis
+                </div>
+                <div class="monitor" id="status-infinity">
+                    <span class="dot red-glow"></span> Infinity
+                </div>
+                <div class="monitor" id="status-ollama">
+                    <span class="dot red-glow"></span> Ollama
+                </div>
+                <div class="monitor" id="status-reranker">
+                    <span class="dot red-glow"></span> Reranker
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Body -->
+        <div class="main-layout">
+            <!-- Sidebar: Documents List -->
+            <aside class="sidebar glass">
+                <div class="sidebar-header">
+                    <h3>Knowledge Base Documents</h3>
+                    <span class="servant-count" id="servant-count">0</span>
+                </div>
+                <div class="search-box">
+                    <input type="text" id="servant-search" placeholder="Search document corpus...">
+                </div>
+                <ul class="servant-list" id="servant-list">
+                    <li class="loading-item">Loading documents...</li>
+                </ul>
+            </aside>
+
+            <!-- Chat Panel -->
+            <main class="chat-container glass">
+                <div class="chat-messages" id="chat-messages">
+                    <div class="system-welcome-card">
+                        <div class="welcome-icon">🧬</div>
+                        <h2>Chimera Cortex</h2>
+                        <p class="tagline">An Omni-Context Knowledge Engine</p>
+                        <p>Ask questions about your indexed documents and local data. Our multi-service semantic retrieval engine searches MinIO object storage, queries Infinity vector database for sub-millisecond similarity matching, and generates context-aware answers.</p>
+                        <div class="suggested-queries">
+                            <h4>Suggested Queries:</h4>
+                            <button class="suggested-btn">What is Gawain's strength rank?</button>
+                            <button class="suggested-btn">What are the characteristics of the Knight of the Round Table Gawain?</button>
+                            <button class="suggested-btn">Summarize the background lore of Saber Gawain.</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="chat-input-area">
+                    <form id="chat-form">
+                        <input type="text" id="chat-input" placeholder="Ask a question about the document corpus..." required autocomplete="off">
+                        <button type="submit" class="send-btn">
+                            <span>Send Query</span>
+                            <span class="send-icon">✦</span>
+                        </button>
+                    </form>
+                </div>
+            </main>
+
+            <!-- RAG Analytics Panel -->
+            <aside class="analytics-panel glass">
+                <div class="panel-header">
+                    <h3>RAG Semantic Insights</h3>
+                </div>
+                
+                <div class="insight-section">
+                    <h4>Cache & Performance</h4>
+                    <div class="perf-stats">
+                        <div class="stat-card">
+                            <span class="stat-label">Cache Status</span>
+                            <span class="stat-value" id="cache-status">N/A</span>
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-label">Time Taken</span>
+                            <span class="stat-value" id="response-time">0 ms</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="insight-section">
+                    <h4>Retrieved Contexts (Infinity DB)</h4>
+                    <div class="retrieved-contexts" id="retrieved-contexts">
+                        <div class="no-context">No context loaded. Submit a query to retrieve vector matches.</div>
+                    </div>
+                </div>
+            </aside>
+        </div>
+    </div>
+
+    <!-- Document Modal Viewer -->
+    <div class="modal" id="document-modal">
+        <div class="modal-content glass">
+            <div class="modal-header">
+                <h3 id="modal-title">Source Manuscript</h3>
+                <button class="close-btn" id="close-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <pre class="markdown-preview" id="modal-content">Loading content from MinIO...</pre>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
