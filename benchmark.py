@@ -129,6 +129,7 @@ def call_judge(
             "model": judge_model,
             "prompt": full_prompt,
             "stream": False,
+            "think": False,
             "options": {"temperature": 0.0},
         },
         timeout=timeout,
