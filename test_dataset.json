@@ -1,0 +1,22 @@
+[
+  {
+    "id": "QA-01",
+    "question": "What is the name of the Heroic Spirit possessing Mash Kyrielight?",
+    "reference_answer": "Galahad — one of the Knights of the Round Table in Arthurian Legend, and the only knight who obtained the Holy Grail and returned it to heaven.",
+    "source_files": ["001_Mash_Kyrielight_lore.md"],
+    "required_chunks": [
+      "Mash has acquired the True Name of the Heroic Spirit who possessed her. The name of that knight is Galahad, one of the Knights of the Round Table in Arthurian Legend. A saint who was the one person to acquire the Holy Grail, and return it to heaven."
+    ],
+    "difficulty": "simple"
+  },
+  {
+    "id": "QA-02",
+    "question": "Why was Mash's Noble Phantasm named \"Lord Chaldeas\"?",
+    "reference_answer": "The Noble Phantasm was given the name \"Chaldeas\" because of Mash's innate wish — the desire to \"see the future of humanity.\"",
+    "source_files": ["001_Mash_Kyrielight_lore.md"],
+    "required_chunks": [
+      "It is believed the Noble Phantasm was crowned with the name \"Chaldeas\" because of Mash's innate wish of \"seeing the future of humanity.\""
+    ],
+    "difficulty": "simple"
+  }
+]

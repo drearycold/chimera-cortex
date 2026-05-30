@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chimera Cortex: An Omni-Context Knowledge Engine</title>
     <link rel="stylesheet" href="style.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="app-container">
@@ -13,8 +13,14 @@
         <header class="navbar glass">
             <div class="logo">
                 <span class="logo-icon">🧬</span>
-                <h1>Chimera Cortex: <span class="accent-text">Omni-Context Knowledge Engine</span></h1>
+                <h1>Chimera Cortex</h1>
             </div>
+            
+            <div class="nav-tabs">
+                <button class="nav-tab active" id="tab-chat">Chat Portal</button>
+                <button class="nav-tab" id="tab-benchmark">RAG Audit Suite</button>
+            </div>
+            
             <div class="health-monitors">
                 <div class="monitor" id="status-mysql">
                     <span class="dot red-glow"></span> MySQL
@@ -37,8 +43,8 @@
             </div>
         </header>
 
-        <!-- Main Body -->
-        <div class="main-layout">
+        <!-- Main Chat Portal Layout -->
+        <div class="main-layout" id="chat-layout">
             <!-- Sidebar: Documents List -->
             <aside class="sidebar glass">
                 <div class="sidebar-header">
@@ -108,6 +114,165 @@
                     </div>
                 </div>
             </aside>
+        </div>
+
+        <!-- RAG Audit Dashboard Layout -->
+        <div class="main-layout" id="benchmark-layout" style="display: none;">
+            <!-- Sidebar: Historical Run Logs -->
+            <aside class="sidebar glass" style="width: 320px;">
+                <div class="sidebar-header">
+                    <h3>Audit Runs History</h3>
+                    <span class="servant-count" id="run-count" style="background: var(--accent-color); color: #070b13;">0</span>
+                </div>
+                <div class="run-controls-card">
+                    <div class="control-row">
+                        <label for="judge-select">Judge Model</label>
+                        <select id="judge-select" class="sidebar-select">
+                            <option value="qwen3.5:9b">qwen3.5:9b (192.168.11.60)</option>
+                            <option value="qwen2.5:3b">qwen2.5:3b (Local Ollama)</option>
+                        </select>
+                    </div>
+                    <div class="control-row">
+                        <label for="dataset-select">Dataset</label>
+                        <select id="dataset-select" class="sidebar-select">
+                            <option value="benchmark_dataset.json">benchmark_dataset.json</option>
+                        </select>
+                    </div>
+                    <div class="control-row-inline">
+                        <input type="checkbox" id="reuse-cache-check">
+                        <label for="reuse-cache-check">Reuse Redis Cache</label>
+                    </div>
+                    <div class="control-actions">
+                        <button id="btn-run-benchmark" class="benchmark-btn primary">✦ Run Benchmark</button>
+                        <button id="btn-stop-benchmark" class="benchmark-btn danger" style="display: none;">■ Stop Run</button>
+                    </div>
+                    <!-- Live Progress Status -->
+                    <div id="live-progress-container" class="live-progress-box" style="display: none;">
+                        <div class="live-status-hdr">
+                            <span class="pulse-dot"></span>
+                            <span id="live-progress-status">Evaluating pipeline...</span>
+                        </div>
+                        <div class="progress-bar-bg">
+                            <div id="live-progress-fill" class="progress-bar-fill" style="width: 0%;"></div>
+                        </div>
+                    </div>
+                </div>
+                <ul class="runs-list" id="runs-list">
+                    <li class="loading-item">Loading run history...</li>
+                </ul>
+            </aside>
+
+            <!-- Main Audit Analytics Panel -->
+            <main class="benchmark-main glass">
+                <!-- Welcome/Placeholder Card -->
+                <div id="benchmark-welcome" class="benchmark-placeholder">
+                    <div class="welcome-icon">📊</div>
+                    <h2>RAG Audit & Evaluation Center</h2>
+                    <p>Trigger structured pipeline audits or select an evaluation run from the history sidebar to view deep performance telemetry.</p>
+                </div>
+
+                <!-- Run Detail Dashboard -->
+                <div id="benchmark-detail" class="benchmark-details-wrapper" style="display: none;">
+                    <div class="detail-header">
+                        <div>
+                            <h2 id="run-title">Run #12</h2>
+                            <p class="run-subtitle">Dataset: <span id="run-dataset-text">dataset</span> &nbsp;|&nbsp; Judge: <span id="run-judge-text">qwen3.5:9b</span></p>
+                        </div>
+                        <div class="detail-actions">
+                            <button id="btn-delete-run" class="delete-run-btn">🗑 Delete Run</button>
+                        </div>
+                    </div>
+
+                    <!-- Metrics KPI Cards -->
+                    <div class="metrics-grid">
+                        <div class="kpi-card correctness">
+                            <div class="kpi-label">Avg Correctness</div>
+                            <div class="kpi-value" id="kpi-correctness">0.00<span class="kpi-suffix">/ 5</span></div>
+                        </div>
+                        <div class="kpi-card faithfulness">
+                            <div class="kpi-label">Avg Faithfulness</div>
+                            <div class="kpi-value" id="kpi-faithfulness">0.00<span class="kpi-suffix">/ 5</span></div>
+                        </div>
+                        <div class="kpi-card retrieval">
+                            <div class="kpi-label">Avg Retrieval</div>
+                            <div class="kpi-value" id="kpi-retrieval">0.00<span class="kpi-suffix">/ 5</span></div>
+                        </div>
+                        <div class="kpi-card passrate">
+                            <div class="kpi-label">Fidelity Pass Rate</div>
+                            <div class="kpi-value" id="kpi-passrate">0.0<span class="kpi-suffix">%</span></div>
+                        </div>
+                        <div class="kpi-card latency">
+                            <div class="kpi-label">Avg Latency</div>
+                            <div class="kpi-value" id="kpi-latency" style="color: #fbbf24;">0.0<span class="kpi-suffix">ms</span></div>
+                        </div>
+                    </div>
+
+                    <!-- Global Latency Breakdown -->
+                    <div class="latency-panel">
+                        <div class="panel-title">
+                            <span>Average Telemetry Latency Breakdown</span>
+                            <span id="detail-total-latency-text">0.0 ms</span>
+                        </div>
+                        <div class="latency-bar-container" id="detail-latency-bar">
+                            <!-- Injected dynamically -->
+                        </div>
+                        <div class="latency-legend">
+                            <div class="legend-item"><div class="legend-dot seg-embed"></div>Embedding</div>
+                            <div class="legend-item"><div class="legend-dot seg-retrieval"></div>Infinity Retrieval</div>
+                            <div class="legend-item"><div class="legend-dot seg-rerank"></div>Llama Reranking</div>
+                            <div class="legend-item"><div class="legend-dot seg-gen"></div>Ollama Synthesis</div>
+                        </div>
+                    </div>
+
+                    <!-- Filter Control Dock -->
+                    <div class="control-dock">
+                        <div class="search-wrapper">
+                            <span class="search-icon">🔍</span>
+                            <input type="text" class="search-input" id="q-search" placeholder="Search questions, reference answers or synthesized outputs...">
+                        </div>
+                        <div class="filter-groups">
+                            <div class="filter-group">
+                                <span class="filter-label">Difficulty</span>
+                                <div class="pill-container" id="filter-difficulty">
+                                    <button class="filter-pill active" data-val="all">All</button>
+                                    <button class="filter-pill" data-val="simple">Simple</button>
+                                    <button class="filter-pill" data-val="cross-chunk">Cross-Chunk</button>
+                                </div>
+                            </div>
+                            <div class="filter-group">
+                                <span class="filter-label">Cache</span>
+                                <div class="pill-container" id="filter-cache">
+                                    <button class="filter-pill active" data-val="all">All</button>
+                                    <button class="filter-pill" data-val="hit">Hits</button>
+                                    <button class="filter-pill" data-val="miss">Misses</button>
+                                </div>
+                            </div>
+                            <div class="filter-group">
+                                <span class="filter-label">Fidelity</span>
+                                <div class="pill-container" id="filter-fidelity">
+                                    <button class="filter-pill active" data-val="all">All</button>
+                                    <button class="filter-pill" data-val="pass">Pass (≥4)</button>
+                                    <button class="filter-pill" data-val="fail">Low (<4)</button>
+                                </div>
+                            </div>
+                            <div class="filter-group">
+                                <span class="filter-label">Sort</span>
+                                <select class="sort-select" id="q-sort">
+                                    <option value="id">QID Order</option>
+                                    <option value="slowest">Slowest Latency</option>
+                                    <option value="fastest">Fastest Latency</option>
+                                    <option value="correctness">Lowest Correctness</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Accordion list of questions -->
+                    <div class="questions-list" id="audit-questions-container">
+                        <!-- Rendered dynamically -->
+                    </div>
+                </div>
+            </main>
         </div>
     </div>
 
