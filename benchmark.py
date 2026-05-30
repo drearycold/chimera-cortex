@@ -29,27 +29,10 @@ import httpx
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
-def load_env():
-    env_path = os.path.join(os.path.dirname(__file__), ".env")
-    if os.path.exists(env_path):
-        with open(env_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                parts = line.split("=", 1)
-                if len(parts) == 2:
-                    key = parts[0].strip()
-                    val = parts[1].strip().strip('"').strip("'")
-                    os.environ.setdefault(key, val)
-
-load_env()
-
-DEFAULT_API_URL = "http://127.0.0.1:8000"
-DEFAULT_DATASET = os.path.join(os.path.dirname(__file__), "benchmark_dataset.json")
-DEFAULT_OLLAMA_HOST = os.getenv("OLLAMA_HOST", "127.0.0.1:11434")
-DEFAULT_JUDGE_MODEL = os.getenv("OLLAMA_GEN_MODEL", "qwen2.5:3b")
-RESULTS_DIR = os.path.join(os.path.dirname(__file__), "benchmark_results")
+from cortex.config import (
+    DEFAULT_API_URL, DEFAULT_DATASET, DEFAULT_OLLAMA_HOST,
+    DEFAULT_JUDGE_MODEL, RESULTS_DIR
+)
 
 # ---------------------------------------------------------------------------
 # Judge prompt

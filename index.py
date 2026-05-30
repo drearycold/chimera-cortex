@@ -1,116 +1,22 @@
+#!/usr/bin/env python3
+"""
+Chimera Cortex — Ingestion Pipeline
+===================================
+Discovers corpus manuscripts, uploads raw Markdown documents to MinIO,
+registers metadata in MySQL, chunks sections, generates embeddings,
+and stores vector vectors inside Infinity DB.
+"""
+
 import os
-import re
 import sys
 import glob
 import io
 import httpx
-import mysql.connector
-from minio import Minio
+from concurrent.futures import ThreadPoolExecutor
 
-# Environment variables loader (.env parser)
-def load_env():
-    env_path = os.path.join(os.path.dirname(__file__), ".env")
-    if os.path.exists(env_path):
-        with open(env_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                parts = line.split("=", 1)
-                if len(parts) == 2:
-                    key = parts[0].strip()
-                    val = parts[1].strip().strip('"').strip("'")
-                    os.environ[key] = val
-
-load_env()
-
-# Configurations
-INFINITY_HOST = os.getenv("INFINITY_HOST", "127.0.0.1")
-INFINITY_HTTP_PORT = int(os.getenv("INFINITY_PORT", "23820"))
-INFINITY_API_URL = f"http://{INFINITY_HOST}:{INFINITY_HTTP_PORT}"
-
-MYSQL_HOST = os.getenv("MYSQL_HOST", "127.0.0.1")
-MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
-MYSQL_USER = os.getenv("MYSQL_USER", "root")
-MYSQL_PASS = os.getenv("MYSQL_PASS", "root")
-
-MINIO_HOST = os.getenv("MINIO_HOST", "127.0.0.1:9000")
-MINIO_USER = os.getenv("MINIO_USER", "minioadmin")
-MINIO_PASS = os.getenv("MINIO_PASS", "minioadmin")
-
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "127.0.0.1:11434")
-OLLAMA_EMBED_URL = f"http://{OLLAMA_HOST}/api/embeddings"
-OLLAMA_MODEL = "bge-m3:latest"
-
-
-def parse_document_title(filename):
-    base = os.path.basename(filename)
-    # Strip numeric prefixes and lore suffixes common in Fate dataset, e.g. 123_Gawain_lore.md -> Gawain
-    match = re.match(r"^\d+_(.*)_lore\.md$", base)
-    if match:
-        name_str = match.group(1)
-        return name_str.replace("_", " ")
-    # Otherwise general clean up
-    return base.replace("_", " ").replace(".md", "")
-
-def chunk_markdown(content, doc_title, max_chars=800):
-    lines = content.split("\n")
-    current_heading = "Overview"
-    paragraphs = []
-    current_para = []
-    
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            if current_para:
-                paragraphs.append((current_heading, "\n".join(current_para)))
-                current_para = []
-            continue
-        
-        heading_match = re.match(r"^(#+)\s+(.*)$", stripped)
-        if heading_match:
-            if current_para:
-                paragraphs.append((current_heading, "\n".join(current_para)))
-                current_para = []
-            current_heading = heading_match.group(2).strip()
-            continue
-            
-        current_para.append(line)
-        
-    if current_para:
-        paragraphs.append((current_heading, "\n".join(current_para)))
-        
-    chunks = []
-    current_chunk = []
-    current_len = 0
-    current_head = "Overview"
-    
-    for heading, text in paragraphs:
-        prefix = f"[{doc_title} - {heading}] "
-        full_text = prefix + text
-        
-        if current_len + len(full_text) > max_chars and current_chunk:
-            chunks.append((current_head, "\n\n".join(current_chunk)))
-            current_chunk = [full_text]
-            current_len = len(full_text)
-            current_head = heading
-        else:
-            current_chunk.append(full_text)
-            current_len += len(full_text) + 2
-            
-    if current_chunk:
-        chunks.append((current_head, "\n\n".join(current_chunk)))
-        
-    return chunks
-
-def get_embedding(text):
-    try:
-        r = httpx.post(OLLAMA_EMBED_URL, json={"model": OLLAMA_MODEL, "prompt": text}, timeout=30.0)
-        r.raise_for_status()
-        return r.json()["embedding"]
-    except Exception as e:
-        print(f"Error calling Ollama embedding API: {e}")
-        return None
+from cortex.config import INFINITY_API_URL
+from cortex.database import get_mysql_connection, get_minio_client
+from cortex.rag import parse_document_title, chunk_markdown, get_embedding
 
 def main():
     print("=== Starting Ingestion Pipeline (Direct HTTP) ===")
@@ -118,12 +24,7 @@ def main():
     # 1. Connect to MinIO
     print("Connecting to MinIO...")
     try:
-        minio_client = Minio(
-            MINIO_HOST,
-            access_key=MINIO_USER,
-            secret_key=MINIO_PASS,
-            secure=False
-        )
+        minio_client = get_minio_client()
         bucket_name = "cortex-documents"
         if not minio_client.bucket_exists(bucket_name):
             minio_client.make_bucket(bucket_name)
@@ -137,6 +38,9 @@ def main():
     # 2. Connect to MySQL & Setup Relational DB
     print("Connecting to MySQL...")
     try:
+        # Establish base connection to setup DB if not exists
+        from cortex.config import MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASS
+        import mysql.connector
         mysql_conn = mysql.connector.connect(
             host=MYSQL_HOST,
             port=MYSQL_PORT,
@@ -166,7 +70,7 @@ def main():
     print("Connecting to Infinity Vector DB (HTTP)...")
     try:
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
-        # Drop table if exists (using request with json={} body due to oatpp requirement)
+        # Drop table if exists
         try:
             res_del = httpx.request(
                 "DELETE",
@@ -219,6 +123,10 @@ def main():
     doc_success_count = 0
     total_chunks_indexed = 0
     
+    # Establish unified MySQL connection
+    mysql_conn = get_mysql_connection()
+    cursor = mysql_conn.cursor()
+    
     for file_idx, filepath in enumerate(files, 1):
         filename = os.path.basename(filepath)
         doc_title = parse_document_title(filename)
@@ -259,8 +167,6 @@ def main():
             
             # D. Concurrently generate embeddings & insert into Infinity (HTTP)
             infinity_batch = []
-            
-            from concurrent.futures import ThreadPoolExecutor
             
             def embed_chunk(chunk_data):
                 chunk_idx, heading, chunk_text = chunk_data

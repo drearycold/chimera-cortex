@@ -1,183 +1,25 @@
 import os
 import io
 import time
+import json
 import httpx
-import redis
-import mysql.connector
-import math
-from minio import Minio
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-# Environment variables loader (.env parser)
-def load_env():
-    env_path = os.path.join(os.path.dirname(__file__), ".env")
-    if os.path.exists(env_path):
-        with open(env_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                parts = line.split("=", 1)
-                if len(parts) == 2:
-                    key = parts[0].strip()
-                    val = parts[1].strip().strip('"').strip("'")
-                    os.environ[key] = val
-
-load_env()
-
-# Configurations
-INFINITY_HOST = os.getenv("INFINITY_HOST", "127.0.0.1")
-INFINITY_HTTP_PORT = int(os.getenv("INFINITY_PORT", "23820"))
-INFINITY_API_URL = f"http://{INFINITY_HOST}:{INFINITY_HTTP_PORT}"
-
-MYSQL_HOST = os.getenv("MYSQL_HOST", "127.0.0.1")
-MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
-MYSQL_USER = os.getenv("MYSQL_USER", "root")
-MYSQL_PASS = os.getenv("MYSQL_PASS", "root")
-
-MINIO_HOST = os.getenv("MINIO_HOST", "127.0.0.1:9000")
-MINIO_USER = os.getenv("MINIO_USER", "minioadmin")
-MINIO_PASS = os.getenv("MINIO_PASS", "minioadmin")
-
-REDIS_HOST = os.getenv("REDIS_HOST", "127.0.0.1")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "127.0.0.1:11434")
-OLLAMA_EMBED_URL = f"http://{OLLAMA_HOST}/api/embeddings"
-OLLAMA_GENERATE_URL = f"http://{OLLAMA_HOST}/api/generate"
-OLLAMA_EMBED_MODEL = "bge-m3:latest"
-OLLAMA_GEN_MODEL = "qwen2.5:3b"
-
-# Reranker configurations (llama-server in rerank mode)
-RERANKER_HOST = os.getenv("RERANKER_HOST", "127.0.0.1")
-RERANKER_PORT = int(os.getenv("RERANKER_PORT", "8082"))
-RERANKER_URL = f"http://{RERANKER_HOST}:{RERANKER_PORT}/v1/rerank"
+from cortex.config import (
+    INFINITY_API_URL, OLLAMA_EMBED_URL, OLLAMA_GENERATE_URL,
+    OLLAMA_EMBED_MODEL, OLLAMA_GEN_MODEL
+)
+from cortex.database import (
+    get_mysql_connection, get_minio_client, get_redis_client, get_service_status
+)
+from cortex.rag import rerank_documents
 
 app = FastAPI(title="Chimera Cortex: An Omni-Context Knowledge Engine")
 
 class ChatRequest(BaseModel):
     query: str
-
-# Helper to verify services connectivity
-def get_service_status():
-    status = {
-        "mysql": False,
-        "minio": False,
-        "redis": False,
-        "infinity": False,
-        "ollama": False,
-        "reranker": False
-    }
-    
-    # 1. Test MySQL
-    try:
-        conn = mysql.connector.connect(
-            host=MYSQL_HOST,
-            port=MYSQL_PORT,
-            user=MYSQL_USER,
-            password=MYSQL_PASS,
-            database="cortex_rag",
-            connection_timeout=2
-        )
-        if conn.is_connected():
-            status["mysql"] = True
-            conn.close()
-    except Exception:
-        pass
-
-    # 2. Test MinIO
-    try:
-        minio_client = Minio(
-            MINIO_HOST,
-            access_key=MINIO_USER,
-            secret_key=MINIO_PASS,
-            secure=False
-        )
-        minio_client.bucket_exists("cortex-documents")
-        status["minio"] = True
-    except Exception:
-        pass
-
-    # 3. Test Redis
-    try:
-        r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, socket_timeout=2)
-        if r.ping():
-            status["redis"] = True
-    except Exception:
-        pass
-
-    # 4. Test Infinity (HTTP REST API)
-    try:
-        r = httpx.get(f"{INFINITY_API_URL}/databases", timeout=2.0)
-        if r.status_code == 200:
-            status["infinity"] = True
-    except Exception:
-        pass
-
-    # 5. Test Ollama
-    try:
-        r = httpx.get(f"http://{OLLAMA_HOST}/api/version", timeout=2.0)
-        if r.status_code == 200:
-            status["ollama"] = True
-    except Exception:
-        pass
-
-    # 6. Test Reranker (llama-server)
-    try:
-        r = httpx.get(f"http://{RERANKER_HOST}:{RERANKER_PORT}/health", timeout=2.0)
-        if r.status_code == 200 and r.json().get("status") == "ok":
-            status["reranker"] = True
-    except Exception:
-        pass
-
-    return status
-
-# Document Reranker Helper Function
-def rerank_documents(query: str, candidates: list) -> list:
-    if not candidates:
-        return []
-    
-    try:
-        # Extract the texts of the candidate chunks (remote batch size increased to 4096)
-        documents = [c["content"] for c in candidates]
-        
-        # Query llama-server /v1/rerank endpoint
-        resp = httpx.post(
-            RERANKER_URL,
-            json={
-                "query": query,
-                "documents": documents
-            },
-            timeout=10.0
-        )
-        resp.raise_for_status()
-        res_data = resp.json()
-        
-        # Results contains list of results with indices and raw logit scores
-        results = res_data.get("results", [])
-        
-        # Apply Sigmoid Activation Function to map raw logit scores to standard similarity [0.0, 1.0]
-        for r in results:
-            idx = r["index"]
-            raw_score = r["relevance_score"]
-            # Sigmoid: 1 / (1 + exp(-x))
-            sigmoid_score = 1.0 / (1.0 + math.exp(-raw_score))
-            candidates[idx]["distance"] = sigmoid_score
-            candidates[idx]["rerank_logit"] = float(raw_score)
-            candidates[idx]["rerank_score"] = float(sigmoid_score)
-            
-        # Sort descending by updated similarity score
-        candidates.sort(key=lambda x: x["distance"], reverse=True)
-        return candidates
-    except Exception as e:
-        print(f"[Warning] Reranker failed, falling back to original Infinity vector ordering: {e}")
-        for c in candidates:
-            c["rerank_logit"] = None
-            c["rerank_score"] = None
-        return candidates
 
 # API Endpoints
 @app.get("/api/status")
@@ -187,13 +29,7 @@ async def api_status():
 @app.get("/api/documents")
 async def api_documents():
     try:
-        conn = mysql.connector.connect(
-            host=MYSQL_HOST,
-            port=MYSQL_PORT,
-            user=MYSQL_USER,
-            password=MYSQL_PASS,
-            database="cortex_rag"
-        )
+        conn = get_mysql_connection()
         cursor = conn.cursor(dictionary=True)
         cursor.execute("SELECT id, filename, title FROM documents ORDER BY title ASC")
         documents = cursor.fetchall()
@@ -203,16 +39,10 @@ async def api_documents():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
-
 @app.get("/api/document/{filename}")
 async def api_document(filename: str):
     try:
-        minio_client = Minio(
-            MINIO_HOST,
-            access_key=MINIO_USER,
-            secret_key=MINIO_PASS,
-            secure=False
-        )
+        minio_client = get_minio_client()
         response = minio_client.get_object("cortex-documents", filename)
         content = response.read().decode("utf-8")
         response.close()
@@ -225,13 +55,7 @@ async def api_document(filename: str):
 async def api_delete_document(filename: str):
     # 1. Connect to MySQL and retrieve document_id
     try:
-        mysql_conn = mysql.connector.connect(
-            host=MYSQL_HOST,
-            port=MYSQL_PORT,
-            user=MYSQL_USER,
-            password=MYSQL_PASS,
-            database="cortex_rag"
-        )
+        mysql_conn = get_mysql_connection()
         cursor = mysql_conn.cursor()
         cursor.execute("SELECT id FROM documents WHERE filename = %s", (filename,))
         res = cursor.fetchone()
@@ -267,12 +91,7 @@ async def api_delete_document(filename: str):
 
     # 3. Delete from MinIO Object Storage
     try:
-        minio_client = Minio(
-            MINIO_HOST,
-            access_key=MINIO_USER,
-            secret_key=MINIO_PASS,
-            secure=False
-        )
+        minio_client = get_minio_client()
         minio_client.remove_object("cortex-documents", filename)
     except Exception as e:
         print(f"[Warning] Failed to delete object from MinIO: {e}")
@@ -288,7 +107,7 @@ async def api_delete_document(filename: str):
 
     # 5. Flush Redis Cache
     try:
-        r_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, socket_timeout=2)
+        r_client = get_redis_client()
         r_client.flushdb()
         print("Redis cache flushed successfully.")
     except Exception as e:
@@ -312,7 +131,7 @@ async def api_delete_document(filename: str):
 @app.post("/api/cache/clear")
 async def api_clear_cache():
     try:
-        r_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, socket_timeout=2)
+        r_client = get_redis_client()
         r_client.flushdb()
         return {"message": "Redis generation cache has been successfully cleared."}
     except Exception as e:
@@ -328,10 +147,9 @@ async def api_chat(req: ChatRequest):
     # 1. Check Redis Cache
     r_client = None
     try:
-        r_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, socket_timeout=2)
+        r_client = get_redis_client()
         cached_val = r_client.get(f"rag_cache:{query}")
         if cached_val:
-            import json
             cached_data = json.loads(cached_val.decode("utf-8"))
             cached_data["cache_hit"] = True
             return cached_data
@@ -389,13 +207,7 @@ async def api_chat(req: ChatRequest):
             print(f"[Warning] Infinity HTTP search returned error: {search_res.get('error_msg')}")
         
         # Resolve document_id to filename using MySQL
-        mysql_conn = mysql.connector.connect(
-            host=MYSQL_HOST,
-            port=MYSQL_PORT,
-            user=MYSQL_USER,
-            password=MYSQL_PASS,
-            database="cortex_rag"
-        )
+        mysql_conn = get_mysql_connection()
         cursor = mysql_conn.cursor()
         
         for idx, item_list in enumerate(raw_results):
@@ -537,7 +349,6 @@ async def api_chat(req: ChatRequest):
     # 6. Save to Cache in Redis
     if r_client:
         try:
-            import json
             r_client.setex(f"rag_cache:{query}", 3600, json.dumps(response_data))
         except Exception:
             pass
