@@ -141,8 +141,8 @@ def rerank_documents(query: str, candidates: list) -> list:
         return []
     
     try:
-        # Extract the texts of the candidate chunks
-        documents = [c["content"] for c in candidates]
+        # Extract the texts of the candidate chunks (truncated to 800 chars to avoid exceeding remote batch size limit of 512 tokens)
+        documents = [c["content"][:800] for c in candidates]
         
         # Query llama-server /v1/rerank endpoint
         resp = httpx.post(
@@ -166,12 +166,17 @@ def rerank_documents(query: str, candidates: list) -> list:
             # Sigmoid: 1 / (1 + exp(-x))
             sigmoid_score = 1.0 / (1.0 + math.exp(-raw_score))
             candidates[idx]["distance"] = sigmoid_score
+            candidates[idx]["rerank_logit"] = float(raw_score)
+            candidates[idx]["rerank_score"] = float(sigmoid_score)
             
         # Sort descending by updated similarity score
         candidates.sort(key=lambda x: x["distance"], reverse=True)
         return candidates
     except Exception as e:
         print(f"[Warning] Reranker failed, falling back to original Infinity vector ordering: {e}")
+        for c in candidates:
+            c["rerank_logit"] = None
+            c["rerank_score"] = None
         return candidates
 
 # API Endpoints
@@ -304,9 +309,18 @@ async def api_delete_document(filename: str):
 
     return {"message": f"Document '{filename}' has been successfully deleted from MySQL, MinIO, Infinity DB, Redis, and local disk."}
 
+@app.post("/api/cache/clear")
+async def api_clear_cache():
+    try:
+        r_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, socket_timeout=2)
+        r_client.flushdb()
+        return {"message": "Redis generation cache has been successfully cleared."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to clear Redis cache: {str(e)}")
 
 @app.post("/api/chat")
 async def api_chat(req: ChatRequest):
+    t_start = time.time()
     query = req.query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="Empty query.")
@@ -325,14 +339,17 @@ async def api_chat(req: ChatRequest):
         print(f"[Warning] Redis cache connection failed: {e}")
 
     # 2. Get Query Embedding from Ollama (bge-m3)
+    t_embed_start = time.time()
     try:
         resp = httpx.post(OLLAMA_EMBED_URL, json={"model": OLLAMA_EMBED_MODEL, "prompt": query}, timeout=15.0)
         resp.raise_for_status()
         query_vector = resp.json()["embedding"]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate query embedding via Ollama: {str(e)}")
+    embedding_ms = (time.time() - t_embed_start) * 1000.0
 
     # 3. Retrieve Closest Chunks from Infinity DB (HTTP) - Get topn=10 for Reranking
+    t_retrieval_start = time.time()
     contexts = []
     try:
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
@@ -404,6 +421,8 @@ async def api_chat(req: ChatRequest):
                     filename = db_res[0]
                     
             contexts.append({
+                "document_id": int(doc_id) if doc_id is not None else None,
+                "chunk_index": int(row.get("chunk_index")) if row.get("chunk_index") is not None else None,
                 "filename": filename,
                 "servant_name": doc_title,
                 "content": content,
@@ -415,27 +434,64 @@ async def api_chat(req: ChatRequest):
     except Exception as e:
         print(f"[Warning] Failed to retrieve context from Infinity/MySQL: {e}")
         contexts = []
+    retrieval_ms = (time.time() - t_retrieval_start) * 1000.0
 
     # 4. Rerank Chunks via Remote Llama-Server
+    t_rerank_start = time.time()
+    first_stage_candidates = []
+    second_stage_candidates = []
     if contexts:
+        # Capture first-stage candidates
+        for i, c in enumerate(contexts):
+            first_stage_candidates.append({
+                "document_id": c.get("document_id"),
+                "chunk_index": c.get("chunk_index"),
+                "filename": c["filename"],
+                "servant_name": c["servant_name"],
+                "content": c["content"],
+                "score": c["distance"],
+                "rank": i + 1
+            })
+            
         contexts = rerank_documents(query, contexts)
+        
+        # Capture second-stage candidates
+        for i, c in enumerate(contexts):
+            second_stage_candidates.append({
+                "document_id": c.get("document_id"),
+                "chunk_index": c.get("chunk_index"),
+                "filename": c["filename"],
+                "servant_name": c["servant_name"],
+                "content": c["content"],
+                "first_stage_score": next((f["score"] for f in first_stage_candidates if f["filename"] == c["filename"] and f["chunk_index"] == c["chunk_index"]), c["distance"]),
+                "first_stage_rank": next((f["rank"] for f in first_stage_candidates if f["filename"] == c["filename"] and f["chunk_index"] == c["chunk_index"]), i + 1),
+                "rerank_logit": c.get("rerank_logit"),
+                "rerank_score": c.get("rerank_score"),
+                "rank": i + 1
+            })
+            
         # Select top_k = 3 most relevant chunks after rerank scoring
         contexts = contexts[:3]
+    rerank_ms = (time.time() - t_rerank_start) * 1000.0
 
     # 5. Generate RAG Response via Ollama (qwen2.5:3b)
+    t_gen_start = time.time()
     if contexts:
         context_str = "\n\n".join([f"--- SOURCE: {c['filename']} ---\n{c['content']}" for c in contexts])
         system_prompt = (
-            "You are Chimera Cortex, a helpful and highly knowledgeable document AI assistant. "
-            "Use the provided document context to answer the user query accurately. "
-            "If you cannot find the answer in the context, do your best to answer from your general knowledge, "
-            "but clearly indicate that the provided documents do not contain the answer.\n\n"
+            "You are Chimera Cortex, a strict document AI assistant. "
+            "You must answer the user query based ONLY on the provided document context below. "
+            "Do NOT use any external or general knowledge. If the provided context does not contain "
+            "the answer to the query, respond by stating that the provided documents do not contain "
+            "sufficient information to answer the question.\n\n"
             f"Here is the retrieved context:\n{context_str}"
         )
     else:
         system_prompt = (
-            "You are Chimera Cortex, a helpful document AI assistant. No matching document context was found in the knowledge base. "
-            "Please answer the user query based purely on your general knowledge."
+            "You are Chimera Cortex, a strict document AI assistant. No matching document context was found in the knowledge base. "
+            "Because you are configured to answer based ONLY on the provided context, "
+            "respond by stating that you cannot answer the query because no relevant documents "
+            "were found in the knowledge base."
         )
 
     full_prompt = f"System: {system_prompt}\n\nUser Question: {query}\n\nAnswer:"
@@ -457,11 +513,25 @@ async def api_chat(req: ChatRequest):
         answer = r.json()["response"].strip()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ollama generation failed: {str(e)}")
+    generation_ms = (time.time() - t_gen_start) * 1000.0
+    total_ms = (time.time() - t_start) * 1000.0
 
     response_data = {
         "answer": answer,
         "contexts": contexts,
-        "cache_hit": False
+        "cache_hit": False,
+        "audit": {
+            "timings_ms": {
+                "embedding": round(embedding_ms, 2),
+                "retrieval": round(retrieval_ms, 2),
+                "rerank": round(rerank_ms, 2),
+                "generation": round(generation_ms, 2),
+                "total": round(total_ms, 2)
+            },
+            "first_stage_candidates": first_stage_candidates,
+            "second_stage_candidates": second_stage_candidates,
+            "llm_prompt": full_prompt
+        }
     }
 
     # 6. Save to Cache in Redis

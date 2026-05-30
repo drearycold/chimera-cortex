@@ -1,0 +1,220 @@
+[
+  {
+    "id": "QA-01",
+    "question": "What is the name of the Heroic Spirit possessing Mash Kyrielight?",
+    "reference_answer": "Galahad — one of the Knights of the Round Table in Arthurian Legend, and the only knight who obtained the Holy Grail and returned it to heaven.",
+    "source_files": ["001_Mash_Kyrielight_lore.md"],
+    "required_chunks": [
+      "Mash has acquired the True Name of the Heroic Spirit who possessed her. The name of that knight is Galahad, one of the Knights of the Round Table in Arthurian Legend. A saint who was the one person to acquire the Holy Grail, and return it to heaven."
+    ],
+    "difficulty": "simple"
+  },
+  {
+    "id": "QA-02",
+    "question": "Why was Mash's Noble Phantasm named \"Lord Chaldeas\"?",
+    "reference_answer": "The Noble Phantasm was given the name \"Chaldeas\" because of Mash's innate wish — the desire to \"see the future of humanity.\"",
+    "source_files": ["001_Mash_Kyrielight_lore.md"],
+    "required_chunks": [
+      "It is believed the Noble Phantasm was crowned with the name \"Chaldeas\" because of Mash's innate wish of \"seeing the future of humanity.\""
+    ],
+    "difficulty": "simple"
+  },
+  {
+    "id": "QA-03",
+    "question": "What kind of weapon is Altria Pendragon (Saber)'s Noble Phantasm, Excalibur?",
+    "reference_answer": "Excalibur is a Divine Construct — not forged by man but by the Planet itself. It is the greatest of all sacred swords, classified as an Anti-Fortress Noble Phantasm at Rank A++.",
+    "source_files": ["002_Altria_Pendragon_lore.md"],
+    "required_chunks": [
+      "『Excalibur』 Rank: A++ NP Type: Anti-Fortress Sword of Promised Victory. A weapon not forged by man, but a Divine Construct forged within the Planet. The Noble Phantasm that is greatest of all sacred swords."
+    ],
+    "difficulty": "simple"
+  },
+  {
+    "id": "QA-04",
+    "question": "Why did Altria Pendragon disguise herself as a man throughout her reign?",
+    "reference_answer": "In her era, only men held royal authority. She believed she could not protect anyone as a maiden, so she concealed her gender to rule as king.",
+    "source_files": ["002_Altria_Pendragon_lore.md"],
+    "required_chunks": [
+      "Why was I dressed as a man, you ask? In my time, only men have royal authority. I couldn't protect anything as a maiden."
+    ],
+    "difficulty": "simple"
+  },
+  {
+    "id": "QA-05",
+    "question": "What does Gilgamesh's Noble Phantasm \"Enuma Elish\" do?",
+    "reference_answer": "Enuma Elish is an EX-rank, Anti-World Noble Phantasm unleashed through the sword Ea. It causes a rupture in space and is one of the most powerful Noble Phantasms in existence — a sword capable of \"cutting apart worlds.\"",
+    "source_files": ["012_Gilgamesh_lore.md"],
+    "required_chunks": [
+      "『Enuma Elish』 Rank: EX NP Type: Anti-World Star of Creation that Divided Heaven and Earth. Crowned with the name of a Mesopotamian god, the sword Ea can cause a rupture in space. One of the most powerful Noble Phantasms, it is a sword that can 'cut apart worlds.'"
+    ],
+    "difficulty": "simple"
+  },
+  {
+    "id": "QA-06",
+    "question": "What fraction of Gilgamesh is divine?",
+    "reference_answer": "Gilgamesh is 2/3 divine and 1/3 human — a demi-god.",
+    "source_files": ["012_Gilgamesh_lore.md"],
+    "required_chunks": [
+      "A demi-god with 2/3 divinity and 1/3 humanity, he is matchless in his reign over the world."
+    ],
+    "difficulty": "simple"
+  },
+  {
+    "id": "QA-07",
+    "question": "At what age did Jeanne d'Arc leave her homeland, and at what age was she burned to death?",
+    "reference_answer": "Jeanne d'Arc left her homeland at age 17 and was burned to death at age 19.",
+    "source_files": ["059_Jeanne_d'Arc_lore.md"],
+    "required_chunks": [
+      "She left her homeland at age 17, and in the two short years before she was burned to death at age 19, she engraved her name in history."
+    ],
+    "difficulty": "simple"
+  },
+  {
+    "id": "QA-08",
+    "question": "What was Merlin's father, and how did it affect Merlin?",
+    "reference_answer": "Merlin's father was an incubus — a supernatural being that lives between the Earth and the Moon. This heritage made Merlin a prophet from a young age and granted him the special traits of his non-human bloodline (Mixed Blood: EX).",
+    "source_files": ["150_Merlin_lore.md"],
+    "required_chunks": [
+      "It's said that while his mother was the princess of Wales, his father was an incubus, a supernatural being that lives between the Earth and the Moon. He was a prophet from a young age."
+    ],
+    "difficulty": "simple"
+  },
+  {
+    "id": "QA-09",
+    "question": "Why is Merlin not normally summoned as a Heroic Spirit?",
+    "reference_answer": "Because there is no future in which Merlin can die, he cannot be summoned as a Heroic Spirit through ordinary means. Instead, he single-handedly acquired the skill Self-Manifestation (Rank A) to manifest as a Servant purely as a personal indulgence — a hobby.",
+    "source_files": ["150_Merlin_lore.md"],
+    "required_chunks": [
+      "Merlin is not normally summoned as a Heroic Spirit. This is because there is no future where he can die. He serves his Master as a Servant to vent his selfish desires, which could essentially be called a hobby. In order to indulge this hobby of his, he single-handedly obtained this skill that only a certain special class could possess, and pretends to be summoned as a Servant."
+    ],
+    "difficulty": "simple"
+  },
+  {
+    "id": "QA-10",
+    "question": "Who are Karna's parents, and how did he obtain his Noble Phantasm Vasavi Shakti?",
+    "reference_answer": "Karna is the son of Kunti, a human girl, and Surya, the God of the Sun. He obtained Vasavi Shakti — a lance of light capable of slaying gods — by surrendering his golden divine armor to the god Indra in exchange.",
+    "source_files": ["085_Karna_lore.md"],
+    "required_chunks": [
+      "Karna was born of Kunti, a human girl, and Surya, the God of Sun.",
+      "According to the legend, Karna gave his golden armor to Indra. In exchange for giving up and dismantling his armor, Karna received a lance powerful enough to slay even gods."
+    ],
+    "difficulty": "simple"
+  },
+  {
+    "id": "QA-11",
+    "question": "What abilities did Scáthach teach Cú Chulainn, and how does Cú Chulainn make use of those teachings differently when summoned as a Lancer versus a Caster?",
+    "reference_answer": "Scáthach taught Cú Chulainn all sorts of techniques including Rune magic and martial arts, and bestowed upon him her beloved spear (Gáe Bolg). As a Lancer, he focuses on spear combat with Gáe Bolg as his primary Noble Phantasm; he has Runes at Rank B but keeps them sealed because he finds them a nuisance. As a Caster, with his spear sealed, he shifts entirely to Rune spellcraft (Rank A), specializing in fire and heat attacks via the Ansuz runic letter.",
+    "source_files": ["070_Scáthach_lore.md", "017_Cú_Chulainn_lore.md", "038_Cú_Chulainn_lore.md"],
+    "required_chunks": [
+      "Later she became the mentor of young Cú Chulainn — who would later grow into the hero of Ulster, teaching him all sorts of techniques and even bestowing upon him her beloved spear.",
+      "Runes: B. He possesses Northern European magical crests called Runes. Warriors in the Land of Shadows excel at many arts... He is close to being a top tier rune user but he thinks the Runes just get in the way, so he does not use them often.",
+      "Rune Spell: A. He possesses Northern European magical crests called Runes, given to him by Scáthach. By using them, he can create powerful and diverse effects."
+    ],
+    "difficulty": "cross-chunk"
+  },
+  {
+    "id": "QA-12",
+    "question": "Who created Mordred and for what purpose? And despite that origin, what was Mordred's actual attitude toward Altria?",
+    "reference_answer": "Mordred was created by the witch Morgan — Altria's elder sister and mortal enemy — as a homunculus. Morgan's intent was for Mordred to kill Arthur and bring about a greater king. However, Mordred deeply admired Arthur and desired the king's acceptance above all else. Only after Altria's rejection did Mordred turn against Arthur and plot his destruction.",
+    "source_files": ["076_Mordred_lore.md", "002_Altria_Pendragon_lore.md"],
+    "required_chunks": [
+      "Mordred is an artificial creation, a type of homunculus, created by the witch Morgan who is the elder sister and mortal enemy of King Arthur. Morgan's purpose in creating Mordred was the death of Arthur and the rise of an even greater king.",
+      "Despite Morgan's plans, Mordred admired Arthur greatly and wanted the king's acceptance more than anything, but all that changed with King Arthur's rejection.",
+      "Due to the betrayal of Mordred, one of the Knights of the Round Table, the country was split into two."
+    ],
+    "difficulty": "cross-chunk"
+  },
+  {
+    "id": "QA-13",
+    "question": "What happened to Altria Pendragon at the Battle of Camlann, and what role did Bedivere play in her final moments?",
+    "reference_answer": "Altria defeated Mordred at the Hill of Camlann but suffered fatal wounds. She entrusted Excalibur to Bedivere and departed for Avalon. However, in this work's setting, Bedivere never returned the sword. Altria died without knowing whether Bedivere fulfilled her wish. Consumed by guilt, Bedivere survived for centuries until he exhausted himself in Avalon.",
+    "source_files": ["002_Altria_Pendragon_lore.md", "126_Bedivere_lore.md"],
+    "required_chunks": [
+      "King Arthur defeated Mordred on the Hill of Camlann, but she suffered fatal wounds and fell to her knees. Before her last breath, she entrusted her sacred sword to her last confidante Bedivere, and left the human realm.",
+      "In this work, he is an existence 'as if Bedivere did not return King Arthur's sacred sword.' King Arthur died without knowing whether Bedivere had returned the sword. Out of that guilt, Bedivere's desire to finally return the sword kept him alive for centuries, until he ran out of strength in Avalon."
+    ],
+    "difficulty": "cross-chunk"
+  },
+  {
+    "id": "QA-14",
+    "question": "What is the true identity of Bedivere's Silver Arm \"Airgetlám,\" and what makes Bedivere unique among the Knights of the Round Table?",
+    "reference_answer": "Despite sharing its name with the arm of the Celtic God of War Nuadha, Airgetlám's true identity is the sacred sword Excalibur that Bedivere failed to return. Bedivere is the only ordinary human among the Round Table's superhuman knights — he has no special bloodline or divine heritage, yet served as a brilliant general and skilled swordsman. He is notably not a Heroic Spirit but merely a man from the past.",
+    "source_files": ["126_Bedivere_lore.md"],
+    "required_chunks": [
+      "the silver arm that shares the same name as the divine weapon used by the Celtic God of War, but its true identity is 'the sacred sword Excalibur that he failed to return.'",
+      "Within the Round Table where superhuman heroes gathered, he was the one and only normal human to serve King Arthur.",
+      "My Silver Arm, Airgetlám. I received it from the great mage Merlin. It is said to be the arm of the Celtic God of War, Nuadha."
+    ],
+    "difficulty": "cross-chunk"
+  },
+  {
+    "id": "QA-15",
+    "question": "What is the relationship between Karna and Arjuna, and why were they destined to become enemies?",
+    "reference_answer": "Karna and Arjuna are half-brothers — both born of the same mother Kunti, but from different divine fathers (Karna from Surya, Arjuna from Indra). Karna was abandoned at birth and later joined the Kuru family, rivals of Arjuna's Pandava clan. Their enmity was not divinely ordained — Arjuna himself decided to kill Karna the moment they first met, a karma chosen with 'pure malicious intent.'",
+    "source_files": ["085_Karna_lore.md", "084_Arjuna_lore.md"],
+    "required_chunks": [
+      "Karna was born of Kunti, a human girl, and Surya, the God of Sun. After Karna's birth, he was abandoned by his mother Kunti.",
+      "After Kunti abandoned Karna, she gave birth to the five brothers of the royal Pandu family. The third brother, Arjuna, would grow up to be Karna's rival.",
+      "He was born the son of King Kuru, the third of the five Pandava brothers, and also the son of the Lightning God Indra.",
+      "When did he decide to kill Karna? Probably when they first met. This was not a fate decided by the gods. It is a karma that Arjuna chose with pure malicious intent."
+    ],
+    "difficulty": "cross-chunk"
+  },
+  {
+    "id": "QA-16",
+    "question": "Why is Scáthach unable to die, and what does she wish from the Holy Grail?",
+    "reference_answer": "Scáthach surpassed humanity by killing a god, placing herself 'outside' the world. She lost the capacity to die — she is neither Heroic Spirit nor Divine Spirit, neither living nor dead. She desires death and wishes for the Holy Grail to send someone who can kill her — preferably the one to whom she once entrusted her spear (Cú Chulainn).",
+    "source_files": ["070_Scáthach_lore.md"],
+    "required_chunks": [
+      "Because she has surpassed humanity, killed a god, and placed herself 'outside' of the world",
+      "She cannot die a beautiful death, nor can she die an ugly one. All she can do is continue to exist until the world, both inside and out, disappears. If the Grail is truly almighty, send someone who can actually kill me.",
+      "I desire death. If the Holy Grail truly possess omnipotent power, I would ask it to send someone capable of killing me. And if possible I pray that the person it sends be the one whom I once bestowed this spear to."
+    ],
+    "difficulty": "cross-chunk"
+  },
+  {
+    "id": "QA-17",
+    "question": "How does Karna view Gilgamesh, and how does that perspective reflect on Karna's own circumstances?",
+    "reference_answer": "Karna acknowledges Gilgamesh as a true king with unwavering arrogance and confidence, and admits he is 'a bit jealous.' This contrasts with Karna's own situation: despite possessing martial caliber and dignity ranked among the highest of all Servants, his worth was never publicly acknowledged due to prejudice against his lowly birth. His admiration for Gilgamesh reveals his longing for recognition.",
+    "source_files": ["085_Karna_lore.md"],
+    "required_chunks": [
+      "The golden man, huh? His arrogance never falters, and he never doubts his decisions. I may not care for him, but I certainly must concede that he is a true king. Surely he must have ruled over a strong nation with stalwart citizens. I'm a bit jealous about that.",
+      "Although it was never publicly acknowledged due to prejudice, Karna's caliber as a martial artist and dignity as a person can be ranked one of the highest amongst all Servants."
+    ],
+    "difficulty": "cross-chunk"
+  },
+  {
+    "id": "QA-18",
+    "question": "What thematic similarities exist between Merlin's Noble Phantasm \"Garden of Avalon\" and Mash's Noble Phantasm \"Lord Camelot\"? How do they differ in type?",
+    "reference_answer": "Both draw on Arthurian utopian mythology (Avalon and Camelot) and are fundamentally protective rather than offensive. Garden of Avalon (Anti-Personnel, Rank C) recreates Merlin's sealed tower where flowers bloom even in darkness — 'a land filled with hope.' Lord Camelot (Anti-Evil, Rank B+++) is Galahad's ultimate defense using the Round Table, with power proportional to the user's heart. Both link spiritual strength to their function.",
+    "source_files": ["150_Merlin_lore.md", "001_Mash_Kyrielight_lore.md"],
+    "required_chunks": [
+      "『Garden of Avalon』 Rank: C Type: Anti-Personnel Eternally Secluded Utopia. Merlin recreates the tower where he is still sealed away. Flowers bloom on the ground, and warm sunlight pours into the surroundings, even in the darkest depths of hell.",
+      "『Lord Camelot』 Rank: B+++ NP Type: Anti-Evil Castle of the Distant Utopia. Noble Phantasm of the Heroic Spirit Galahad. It's an ultimate defense, utilizing the table located in the center of Camelot."
+    ],
+    "difficulty": "cross-chunk"
+  },
+  {
+    "id": "QA-19",
+    "question": "Both Cú Chulainn and Scáthach possess a Noble Phantasm called \"Gáe Bolg.\" What are the key differences between the two?",
+    "reference_answer": "Cú Chulainn's Gáe Bolg (Rank B, Anti-Personnel) reverses cause and effect — the spear is thrust after it has already pierced the heart, making it theoretically undodgeable. Scáthach's Gáe Bolg Alternative (Rank B, Anti-Personnel) is the older original model and uses two spears instead of one.",
+    "source_files": ["017_Cú_Chulainn_lore.md", "070_Scáthach_lore.md"],
+    "required_chunks": [
+      "『Gáe Bolg』 Rank: B NP Type: Anti-Personnel Barbed Spear that Pierces with Death. The cursed spear that always pierces the target's heart. The secret is that this spear is able to reverse cause and effect, so that the spear is thrust AFTER it already pierces the target's heart.",
+      "『Gáe Bolg Alternative』 Rank: B NP Type: Anti-Personnel Soaring Spear of Piercing Death. While it looks similar, it's different than the one possessed by Cú Chulainn. It is the same model as Gáe Bolg, but older, and instead of one spear there are two."
+    ],
+    "difficulty": "cross-chunk"
+  },
+  {
+    "id": "QA-20",
+    "question": "Altria Pendragon and Mordred share identical height and weight measurements. How does the lore account for this?",
+    "reference_answer": "Both are 154cm, 42kg. Mordred's profile states she 'shares an identical physique to Altria.' This is because Mordred is a homunculus created by the witch Morgan using Arthur's own lineage — modeled directly after Altria, she naturally inherited the same physical frame.",
+    "source_files": ["002_Altria_Pendragon_lore.md", "076_Mordred_lore.md"],
+    "required_chunks": [
+      "Height/Weight: 154cm, 42kg",
+      "Shares an identical physique to Altria.",
+      "Mordred is an artificial creation, a type of homunculus, created by the witch Morgan... Being modeled after Arthur, Mordred gained prominence as a knight almost immediately."
+    ],
+    "difficulty": "cross-chunk"
+  }
+]

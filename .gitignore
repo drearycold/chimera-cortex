@@ -219,3 +219,6 @@ __marimo__/
 
 # Chimera Cortex Knowledge Base Document Corpus
 documents/
+
+# Benchmark output reports and results
+benchmark_results/
