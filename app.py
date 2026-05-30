@@ -141,8 +141,8 @@ def rerank_documents(query: str, candidates: list) -> list:
         return []
     
     try:
-        # Extract the texts of the candidate chunks (truncated to 800 chars to avoid exceeding remote batch size limit of 512 tokens)
-        documents = [c["content"][:800] for c in candidates]
+        # Extract the texts of the candidate chunks (remote batch size increased to 4096)
+        documents = [c["content"] for c in candidates]
         
         # Query llama-server /v1/rerank endpoint
         resp = httpx.post(
