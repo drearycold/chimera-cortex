@@ -3,10 +3,6 @@ Chimera Cortex — Benchmark Core Module
 =======================================
 Contains the evaluation pipeline logic: LLM-as-Judge scoring, RAG querying,
 background execution manager, and metric aggregation.
-
-This module is imported by:
-  - app.py       (to run benchmarks via the web API)
-  - benchmark.py (thin CLI wrapper that delegates to the HTTP API)
 """
 
 import json
@@ -16,8 +12,8 @@ import time
 import threading
 import httpx
 
-from cortex.config import DEFAULT_OLLAMA_HOST, DEFAULT_JUDGE_MODEL
-from cortex.database import (
+from .config import DEFAULT_OLLAMA_HOST, DEFAULT_JUDGE_MODEL
+from .database import (
     save_benchmark_run, update_benchmark_run_status, save_benchmark_result
 )
 
@@ -238,7 +234,7 @@ class BenchmarkManager:
         finally:
             self.clear_active()
 
-# Singleton manager instance — imported by app.py
+# Singleton manager instance
 manager = BenchmarkManager()
 
 # ---------------------------------------------------------------------------

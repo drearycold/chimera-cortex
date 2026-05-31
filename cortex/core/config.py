@@ -2,7 +2,7 @@ import os
 
 # Environment variables loader (.env parser)
 def load_env():
-    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".env")
     if os.path.exists(env_path):
         with open(env_path, "r", encoding="utf-8") as f:
             for line in f:
@@ -51,5 +51,5 @@ RERANKER_URL = f"http://{RERANKER_HOST}:{RERANKER_PORT}/v1/rerank"
 RERANKER_HEALTH_URL = f"http://{RERANKER_HOST}:{RERANKER_PORT}/health"
 
 # Benchmark specific directories
-RESULTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "benchmark_results")
-DEFAULT_DATASET = os.path.join(os.path.dirname(os.path.dirname(__file__)), "benchmark_dataset.json")
+RESULTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "benchmark_results")
+DEFAULT_DATASET = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "benchmark_dataset.json")

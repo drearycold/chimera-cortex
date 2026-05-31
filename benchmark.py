@@ -20,7 +20,7 @@ import sys
 import time
 import httpx
 
-from cortex.config import DEFAULT_API_URL, DEFAULT_JUDGE_MODEL
+from cortex.core.config import DEFAULT_API_URL, DEFAULT_JUDGE_MODEL
 
 # ---------------------------------------------------------------------------
 # CLI Helpers

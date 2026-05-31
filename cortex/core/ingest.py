@@ -4,10 +4,6 @@ Chimera Cortex — Ingestion Core Module
 Discovers corpus manuscripts, uploads raw Markdown documents to MinIO,
 registers metadata in MySQL, chunks sections, generates embeddings,
 and stores vector vectors inside Infinity DB.
-
-This module is imported by:
-  - app.py     (to run ingest via the web API)
-  - index.py   (thin CLI wrapper that delegates to the HTTP API)
 """
 
 import os
@@ -18,9 +14,9 @@ import httpx
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from cortex.config import INFINITY_API_URL
-from cortex.database import get_mysql_connection, get_minio_client
-from cortex.rag import parse_document_title, chunk_markdown, get_embedding
+from .config import INFINITY_API_URL
+from .database import get_mysql_connection, get_minio_client
+from .rag import parse_document_title, chunk_markdown, get_embedding
 
 class IngestManager:
     """Thread-safe manager ensuring at most one ingestion run is in progress."""
@@ -114,7 +110,7 @@ class IngestManager:
         # 2. Connect to MySQL & Setup Relational DB
         print("[INGEST] Connecting to MySQL...")
         try:
-            from cortex.config import MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASS
+            from .config import MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASS
             import mysql.connector
             mysql_conn = mysql.connector.connect(
                 host=MYSQL_HOST,

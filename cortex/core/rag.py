@@ -2,7 +2,7 @@ import os
 import re
 import math
 import httpx
-from cortex.config import (
+from .config import (
     OLLAMA_EMBED_URL, OLLAMA_EMBED_MODEL, RERANKER_URL
 )
 

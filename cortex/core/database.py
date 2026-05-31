@@ -3,7 +3,7 @@ from minio import Minio
 import redis
 import httpx
 import json
-from cortex.config import (
+from .config import (
     MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASS,
     MINIO_HOST, MINIO_USER, MINIO_PASS,
     REDIS_HOST, REDIS_PORT,

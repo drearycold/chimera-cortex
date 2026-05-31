@@ -19,7 +19,7 @@ import sys
 import time
 import httpx
 
-from cortex.config import DEFAULT_API_URL
+from cortex.core.config import DEFAULT_API_URL
 
 POLL_INTERVAL = 1  # seconds between status polls
 
