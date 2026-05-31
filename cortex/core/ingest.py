@@ -199,11 +199,54 @@ class IngestManager:
             
         doc_success_count = 0
         total_chunks_indexed = 0
+        chunk_queue = []
         
         # Establish unified MySQL connection
         mysql_conn = get_mysql_connection()
         cursor = mysql_conn.cursor()
         
+        def flush_chunk_queue():
+            nonlocal total_chunks_indexed
+            if not chunk_queue:
+                return
+            
+            print(f"   [INGEST] Flushing batch of {len(chunk_queue)} chunks to Ollama & Infinity DB...")
+            chunk_texts = [item["content"] for item in chunk_queue]
+            embeddings = get_embeddings_batch(chunk_texts)
+            
+            infinity_batch = []
+            for idx, item in enumerate(chunk_queue):
+                emb = embeddings[idx] if idx < len(embeddings) else None
+                if emb is None:
+                    print(f"      [Warning] Failed to generate embedding for chunk {item['chunk_index']} of document '{item['document_title']}'. Skipping.")
+                    continue
+                infinity_batch.append({
+                    "document_id": item["document_id"],
+                    "chunk_index": item["chunk_index"],
+                    "document_title": item["document_title"],
+                    "content": item["content"],
+                    "vec": emb
+                })
+            
+            if infinity_batch:
+                # Direct HTTP POST to table/docs
+                docs_res = httpx.post(
+                    f"{INFINITY_API_URL}/databases/default_db/tables/chunks/docs",
+                    json=infinity_batch,
+                    headers=headers,
+                    timeout=30.0
+                )
+                docs_res.raise_for_status()
+                if docs_res.json().get("error_code", 0) != 0:
+                    raise Exception(docs_res.json().get("error_msg"))
+                
+                batch_len = len(infinity_batch)
+                total_chunks_indexed += batch_len
+                with self.lock:
+                    self.total_chunks_indexed = total_chunks_indexed
+            
+            chunk_queue.clear()
+            
         for file_idx, filepath in enumerate(files, 1):
             # Graceful cancellation check
             if self.cancel_event.is_set():
@@ -252,43 +295,17 @@ class IngestManager:
                 cursor.execute("SELECT id FROM documents WHERE filename = %s", (filename,))
                 doc_id = cursor.fetchone()[0]
                 
-                # D. Generate embeddings in one batch request & insert into Infinity (HTTP)
-                infinity_batch = []
-                chunk_texts = [text for head, text in chunks]
-                
-                # Retrieve all embeddings in one single batch HTTP call
-                embeddings = get_embeddings_batch(chunk_texts)
-                
+                # D. Add chunks to global queue and flush when threshold reached
                 for chunk_idx, (head, chunk_text) in enumerate(chunks):
-                    emb = embeddings[chunk_idx] if chunk_idx < len(embeddings) else None
-                    if emb is None:
-                        print(f"      [Warning] Failed to generate embedding for chunk {chunk_idx}. Skipping.")
-                        continue
-                    
-                    infinity_batch.append({
+                    chunk_queue.append({
                         "document_id": doc_id,
                         "chunk_index": chunk_idx,
                         "document_title": doc_title,
-                        "content": chunk_text,
-                        "vec": emb
+                        "content": chunk_text
                     })
                     
-                if infinity_batch:
-                    # Direct HTTP POST to table/docs
-                    docs_res = httpx.post(
-                        f"{INFINITY_API_URL}/databases/default_db/tables/chunks/docs",
-                        json=infinity_batch,
-                        headers=headers,
-                        timeout=30.0
-                    )
-                    docs_res.raise_for_status()
-                    if docs_res.json().get("error_code", 0) != 0:
-                        raise Exception(docs_res.json().get("error_msg"))
-                    
-                    batch_len = len(infinity_batch)
-                    total_chunks_indexed += batch_len
-                    with self.lock:
-                        self.total_chunks_indexed = total_chunks_indexed
+                    if len(chunk_queue) >= 64:
+                        flush_chunk_queue()
                     
                 doc_success_count += 1
                 
@@ -298,6 +315,13 @@ class IngestManager:
             except Exception as e:
                 print(f"   [ERROR] Failed to ingest '{filename}': {e}")
                 mysql_conn.rollback()
+                
+        # E. Flush any remaining chunks in the queue
+        if chunk_queue and self.status != "cancelled":
+            try:
+                flush_chunk_queue()
+            except Exception as e:
+                print(f"   [ERROR] Failed to flush final chunk queue: {e}")
                 
         cursor.close()
         mysql_conn.close()
