@@ -10,6 +10,7 @@ import os
 import re
 import time
 import threading
+import queue
 import httpx
 
 from .config import DEFAULT_OLLAMA_HOST, DEFAULT_JUDGE_MODEL
@@ -240,49 +241,15 @@ manager = BenchmarkManager()
 # ---------------------------------------------------------------------------
 # Internal Core Runner (Checks for Cancellation)
 # ---------------------------------------------------------------------------
-def run_benchmark_internal(
-    mgr: BenchmarkManager,
-    run_id: int,
-    dataset_path: str,
-    judge_model: str,
-    api_url: str,
-    ollama_host: str,
-    reuse_cache: bool,
-    delay: float,
-    timeout: float
-):
-    """Executes the benchmark questions, evaluates them, and writes results to MySQL."""
-    print(f"[RUNNER] Starting benchmark run_id={run_id}")
-    
-    # 1. Load dataset
-    with open(dataset_path, "r", encoding="utf-8") as f:
-        dataset = json.load(f)
-        
-    # 2. Flush Redis cache unless reuse_cache is requested
-    if not reuse_cache:
-        print("[RUNNER] Flushing generation cache via API...")
-        flush_cache_via_api(api_url)
-        
-    # 3. Main execution loop
-    results_list = []
-    start_time = time.time()
-    
+def _rag_producer(mgr, dataset, api_url, timeout, q_out, delay):
+    """Worker function for the RAG generation phase (Producer)."""
     for idx, qa in enumerate(dataset, 1):
-        # Graceful cancellation check
         if mgr.cancel_event.is_set():
-            print(f"[RUNNER] Graceful cancellation received. Aborting run_id={run_id}")
-            elapsed = time.time() - start_time
-            update_completed_metrics(run_id, results_list, elapsed, status="cancelled")
-            return
-            
+            break
         qid = qa["id"]
         question = qa["question"]
-        ref_answer = qa["reference_answer"]
-        difficulty = qa.get("difficulty", "unknown")
+        print(f"[RUNNER-RAG] [{idx}/{len(dataset)}] Querying RAG for {qid}...")
         
-        print(f"[RUNNER] [{idx}/{len(dataset)}] Processing {qid}...")
-        
-        # Query RAG
         try:
             rag_resp = query_rag(api_url, question, timeout=timeout)
             rag_answer = rag_resp.get("answer", "")
@@ -290,7 +257,7 @@ def run_benchmark_internal(
             cache_hit = rag_resp.get("cache_hit", False)
             audit = rag_resp.get("audit")
         except Exception as e:
-            print(f"[RUNNER] RAG Query failed for {qid}: {e}")
+            print(f"[RUNNER-RAG] RAG Query failed for {qid}: {e}")
             rag_answer = f"[ERROR] RAG Query Failed: {e}"
             contexts = []
             cache_hit = False
@@ -304,7 +271,43 @@ def run_benchmark_internal(
                 "llm_prompt": "N/A"
             }
             
-        # Call LLM Judge
+        # Put on queue
+        q_out.put((idx, qa, rag_answer, contexts, cache_hit, audit))
+        
+        # Small sleep between questions
+        if idx < len(dataset) and delay > 0:
+            sleep_step = 0.1
+            slept = 0.0
+            while slept < delay:
+                if mgr.cancel_event.is_set():
+                    break
+                time.sleep(sleep_step)
+                slept += sleep_step
+                
+    # Signal that we are done
+    q_out.put(None)
+
+
+def _judge_consumer(mgr, run_id, judge_model, ollama_host, timeout, q_in, results_list):
+    """Worker function for the Judge evaluation phase (Consumer)."""
+    while True:
+        item = q_in.get()
+        if item is None:
+            q_in.task_done()
+            break
+            
+        idx, qa, rag_answer, contexts, cache_hit, audit = item
+        qid = qa["id"]
+        question = qa["question"]
+        ref_answer = qa["reference_answer"]
+        difficulty = qa.get("difficulty", "unknown")
+        
+        if mgr.cancel_event.is_set():
+            q_in.task_done()
+            continue
+            
+        print(f"[RUNNER-JUDGE] Evaluating {qid} with LLM Judge...")
+        
         try:
             scores = call_judge(
                 ollama_host=ollama_host,
@@ -316,7 +319,7 @@ def run_benchmark_internal(
                 timeout=timeout
             )
         except Exception as e:
-            print(f"[RUNNER] Judge call failed for {qid}: {e}")
+            print(f"[RUNNER-JUDGE] Judge call failed for {qid}: {e}")
             scores = {
                 "answer_correctness": 1,
                 "faithfulness": 1,
@@ -340,14 +343,63 @@ def run_benchmark_internal(
         
         # Save to database immediately
         save_benchmark_result(run_id, result_item)
+        q_in.task_done()
+
+
+def run_benchmark_internal(
+    mgr: BenchmarkManager,
+    run_id: int,
+    dataset_path: str,
+    judge_model: str,
+    api_url: str,
+    ollama_host: str,
+    reuse_cache: bool,
+    delay: float,
+    timeout: float
+):
+    """Executes the benchmark questions, evaluates them, and writes results to MySQL."""
+    print(f"[RUNNER] Starting pipelined benchmark run_id={run_id}")
+    
+    # 1. Load dataset
+    with open(dataset_path, "r", encoding="utf-8") as f:
+        dataset = json.load(f)
         
-        # Small sleep between questions
-        if idx < len(dataset):
-            time.sleep(delay)
-            
+    # 2. Flush Redis cache unless reuse_cache is requested
+    if not reuse_cache:
+        print("[RUNNER] Flushing generation cache via API...")
+        flush_cache_via_api(api_url)
+        
+    # 3. Main execution pipeline
+    q = queue.Queue(maxsize=4)
+    results_list = []
+    start_time = time.time()
+    
+    # Start threads
+    prod_thread = threading.Thread(
+        target=_rag_producer,
+        args=(mgr, dataset, api_url, timeout, q, delay)
+    )
+    prod_thread.daemon = True
+    
+    cons_thread = threading.Thread(
+        target=_judge_consumer,
+        args=(mgr, run_id, judge_model, ollama_host, timeout, q, results_list)
+    )
+    cons_thread.daemon = True
+    
+    prod_thread.start()
+    cons_thread.start()
+    
+    # Wait for execution to finish
+    prod_thread.join()
+    cons_thread.join()
+    
     elapsed = time.time() - start_time
-    print(f"[RUNNER] Completed all {len(dataset)} questions. Updating aggregates.")
-    update_completed_metrics(run_id, results_list, elapsed, status="completed")
+    
+    # Determine exit status
+    status = "cancelled" if mgr.cancel_event.is_set() else "completed"
+    print(f"[RUNNER] Finished pipelined benchmark. Status={status}. Updating aggregates.")
+    update_completed_metrics(run_id, results_list, elapsed, status=status)
 
 
 def update_completed_metrics(run_id: int, results: list, elapsed: float, status: str):
