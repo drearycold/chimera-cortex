@@ -830,8 +830,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 shiftBadge = `<span class="shift-badge shift-none">•</span>`;
             }
 
-            // Top slice highlights
-            const sliceBadge = r2 <= 3 ? ' <span class="top-slice-badge">PROMPT INJECT</span>' : "";
+            // Check if chunk was actually injected into the LLM prompt (dynamic check, no hardcoding)
+            const isInPrompt = item.llm_prompt && item.llm_prompt.includes(candidate.content);
+            const sliceBadge = isInPrompt ? ' <span class="top-slice-badge">PROMPT INJECT</span>' : "";
 
             rows += `
                 <tr>
