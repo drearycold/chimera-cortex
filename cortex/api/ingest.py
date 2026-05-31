@@ -6,6 +6,7 @@ router = APIRouter(prefix="/api", tags=["Ingest"])
 
 class IngestRequest(BaseModel):
     source_dir: str = "documents"
+    force_rebuild: bool = False
 
 @router.get("/ingest/status")
 async def api_ingest_status():
@@ -17,7 +18,7 @@ async def api_run_ingest(req: IngestRequest):
     if status["status"] == "running":
         raise HTTPException(status_code=400, detail="An ingestion run is already in progress.")
     try:
-        ingest_manager.start(source_dir=req.source_dir)
+        ingest_manager.start(source_dir=req.source_dir, force_rebuild=req.force_rebuild)
         return {"message": "Ingestion started successfully."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to start ingestion: {str(e)}")

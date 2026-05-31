@@ -127,9 +127,19 @@ def init_db():
             filename VARCHAR(255) UNIQUE NOT NULL,
             title VARCHAR(255) NOT NULL,
             size_bytes INT NOT NULL,
-            chunk_count INT NOT NULL
+            chunk_count INT NOT NULL,
+            content_hash VARCHAR(64)
         )
         """)
+
+        # Ensure content_hash column exists for older database installations
+        try:
+            cursor.execute("ALTER TABLE documents ADD COLUMN content_hash VARCHAR(64)")
+        except mysql.connector.Error as err:
+            # 1060: Duplicate column name, meaning it already exists
+            if err.errno != 1060:
+                raise err
+
 
         # 2. benchmark_runs table
         cursor.execute("""

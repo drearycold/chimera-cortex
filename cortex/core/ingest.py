@@ -12,6 +12,7 @@ import glob
 import io
 import httpx
 import threading
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 
 from .config import INFINITY_API_URL
@@ -33,7 +34,7 @@ class IngestManager:
         self.total_chunks_indexed = 0
         self.thread = None
 
-    def start(self, source_dir="documents"):
+    def start(self, source_dir="documents", force_rebuild=False):
         """Start document ingestion asynchronously in a background thread."""
         with self.lock:
             if self.is_running:
@@ -49,7 +50,7 @@ class IngestManager:
             
         self.thread = threading.Thread(
             target=self._run_wrapper,
-            args=(source_dir,)
+            args=(source_dir, force_rebuild)
         )
         self.thread.daemon = True
         self.thread.start()
@@ -80,9 +81,9 @@ class IngestManager:
             self.is_running = False
             self.thread = None
 
-    def _run_wrapper(self, source_dir):
+    def _run_wrapper(self, source_dir, force_rebuild):
         try:
-            self._run_ingest(source_dir)
+            self._run_ingest(source_dir, force_rebuild)
         except Exception as e:
             print(f"[ERROR] Ingestion background thread crashed: {e}")
             with self.lock:
@@ -91,8 +92,9 @@ class IngestManager:
         finally:
             self.clear_active()
 
-    def _run_ingest(self, source_dir):
-        print(f"[INGEST] Starting ingestion from '{source_dir}'")
+    def _run_ingest(self, source_dir, force_rebuild=False):
+        print(f"[INGEST] Starting ingestion from '{source_dir}' (force_rebuild={force_rebuild})")
+
         
         # 1. Connect to MinIO
         print("[INGEST] Connecting to MinIO...")
@@ -128,9 +130,19 @@ class IngestManager:
                 filename VARCHAR(255) UNIQUE NOT NULL,
                 title VARCHAR(255) NOT NULL,
                 size_bytes INT NOT NULL,
-                chunk_count INT NOT NULL
+                chunk_count INT NOT NULL,
+                content_hash VARCHAR(64)
             )
             """)
+            
+            # Ensure content_hash column exists for older database installations
+            try:
+                cursor.execute("ALTER TABLE documents ADD COLUMN content_hash VARCHAR(64)")
+            except mysql.connector.Error as err:
+                # 1060: Duplicate column name, meaning it already exists
+                if err.errno != 1060:
+                    raise err
+
             mysql_conn.commit()
             cursor.close()
             mysql_conn.close()
@@ -142,38 +154,57 @@ class IngestManager:
         print("[INGEST] Connecting to Infinity Vector DB (HTTP)...")
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         try:
-            # Drop table if exists
+            # Drop table if force_rebuild is True
+            if force_rebuild:
+                try:
+                    res_del = httpx.request(
+                        "DELETE",
+                        f"{INFINITY_API_URL}/databases/default_db/tables/chunks",
+                        json={},
+                        headers=headers,
+                        timeout=5.0
+                    )
+                    if res_del.status_code == 200:
+                        print("[INGEST] Dropped existing Infinity table 'chunks'.")
+                    else:
+                        print(f"[INGEST] Table drop info: {res_del.text}")
+                except Exception as e:
+                    print(f"[INGEST] Ignore drop table warning: {e}")
+                
+            # Check if table exists
+            table_exists = False
             try:
-                res_del = httpx.request(
-                    "DELETE",
-                    f"{INFINITY_API_URL}/databases/default_db/tables/chunks",
-                    json={},
-                    headers=headers,
-                    timeout=5.0
-                )
-                if res_del.status_code == 200:
-                    print("[INGEST] Dropped existing Infinity table 'chunks'.")
-                else:
-                    print(f"[INGEST] Table drop info: {res_del.text}")
+                chk_res = httpx.get(f"{INFINITY_API_URL}/databases/default_db/tables/chunks", headers=headers, timeout=2.0)
+                if chk_res.status_code == 200:
+                    body = chk_res.json()
+                    if body.get("error_code", 0) == 0:
+                        table_exists = True
+                        print("[INGEST] Infinity table 'chunks' already exists.")
             except Exception as e:
-                print(f"[INGEST] Ignore drop table warning: {e}")
-                
-            # Create Table chunks
-            payload = {
-                "fields": [
-                    {"name": "document_id", "type": "integer"},
-                    {"name": "chunk_index", "type": "integer"},
-                    {"name": "document_title", "type": "varchar"},
-                    {"name": "content", "type": "varchar"},
-                    {"name": "vec", "type": "vector, 768, float"}
-                ]
-            }
-            res = httpx.post(f"{INFINITY_API_URL}/databases/default_db/tables/chunks", json=payload, headers=headers, timeout=5.0)
-            res.raise_for_status()
-            if res.json().get("error_code", 0) != 0:
-                raise Exception(res.json().get("error_msg", "Unknown error"))
-                
-            print("[INGEST] Infinity table 'chunks' created successfully.")
+                print(f"[INGEST] Check table existence warning: {e}")
+
+            if not table_exists:
+                # Create Table chunks
+                payload = {
+                    "fields": [
+                        {"name": "document_id", "type": "integer"},
+                        {"name": "chunk_index", "type": "integer"},
+                        {"name": "document_title", "type": "varchar"},
+                        {"name": "content", "type": "varchar"},
+                        {"name": "vec", "type": "vector, 768, float"}
+                    ]
+                }
+                res = httpx.post(f"{INFINITY_API_URL}/databases/default_db/tables/chunks", json=payload, headers=headers, timeout=5.0)
+                res.raise_for_status()
+                if res.json().get("error_code", 0) != 0:
+                    # Double check if duplicate table error
+                    err_msg = res.json().get("error_msg", "")
+                    if "already exists" in err_msg.lower() or "duplicate" in err_msg.lower():
+                        print("[INGEST] Infinity table 'chunks' already exists (ignoring duplicate error).")
+                    else:
+                        raise Exception(err_msg)
+                else:
+                    print("[INGEST] Infinity table 'chunks' created successfully.")
         except Exception as e:
             raise Exception(f"FAILED to connect/setup Infinity: {e}")
             
@@ -200,6 +231,12 @@ class IngestManager:
         doc_success_count = 0
         total_chunks_indexed = 0
         chunk_queue = []
+        
+        # Track chunk completion: { doc_id: {"total": total, "flushed": 0, "hash": file_hash} }
+        chunk_progress = {}
+
+        def compute_sha256(text):
+            return hashlib.sha256(text.encode("utf-8")).hexdigest()
         
         # Establish unified MySQL connection
         mysql_conn = get_mysql_connection()
@@ -244,6 +281,22 @@ class IngestManager:
                 total_chunks_indexed += batch_len
                 with self.lock:
                     self.total_chunks_indexed = total_chunks_indexed
+                
+                # Update chunk completion status and commit content_hash when fully completed
+                for item in infinity_batch:
+                    doc_id = item["document_id"]
+                    if doc_id in chunk_progress:
+                        chunk_progress[doc_id]["flushed"] += 1
+                        if chunk_progress[doc_id]["flushed"] == chunk_progress[doc_id]["total"]:
+                            try:
+                                print(f"   [INGEST] Document ID {doc_id} completely indexed. Committing content_hash to MySQL...")
+                                cursor.execute(
+                                    "UPDATE documents SET content_hash = %s WHERE id = %s",
+                                    (chunk_progress[doc_id]["hash"], doc_id)
+                                )
+                                mysql_conn.commit()
+                            except Exception as db_err:
+                                print(f"      [Warning] Failed to commit content_hash for document ID {doc_id}: {db_err}")
             
             chunk_queue.clear()
             
@@ -261,14 +314,50 @@ class IngestManager:
             with self.lock:
                 self.current_file = filename
                 
-            print(f"[INGEST] [{file_idx}/{len(files)}] Processing '{filename}' as '{doc_title}'...")
+            print(f"[INGEST] [{file_idx}/{len(files)}] Checking '{filename}'...")
             
             try:
                 with open(filepath, "r", encoding="utf-8") as f:
                     content = f.read()
                     
+                file_hash = compute_sha256(content)
                 content_bytes = content.encode("utf-8")
                 size_bytes = len(content_bytes)
+                
+                # Check MySQL if file exists, its hash, and chunk count
+                cursor.execute(
+                    "SELECT id, content_hash FROM documents WHERE filename = %s",
+                    (filename,)
+                )
+                existing = cursor.fetchone()
+                
+                if existing:
+                    doc_id, db_hash = existing
+                    if not force_rebuild and db_hash == file_hash:
+                        print(f"   -> Unchanged. Skipping.")
+                        doc_success_count += 1
+                        with self.lock:
+                            self.processed_files = doc_success_count
+                        continue
+                    
+                    # File exists but hash differs or rebuild is forced. Clean old chunks.
+                    print(f"   -> Outdated, incomplete, or rebuild forced. Deleting existing chunks from Infinity DB...")
+                    try:
+                        delete_payload = {
+                            "filter": f"document_id = {doc_id}"
+                        }
+                        resp = httpx.request(
+                            "DELETE",
+                            f"{INFINITY_API_URL}/databases/default_db/tables/chunks/docs",
+                            json=delete_payload,
+                            headers=headers,
+                            timeout=10.0
+                        )
+                        resp.raise_for_status()
+                    except Exception as clean_err:
+                        print(f"      [Warning] Failed to delete existing chunks for document ID {doc_id}: {clean_err}")
+                else:
+                    doc_id = None
                 
                 # A. Upload raw file to MinIO
                 minio_client.put_object(
@@ -284,16 +373,38 @@ class IngestManager:
                 chunk_count = len(chunks)
                 print(f"   -> Split into {chunk_count} semantic chunks.")
                 
-                # C. Register document in MySQL
-                cursor.execute(
-                    "INSERT INTO documents (filename, title, size_bytes, chunk_count) VALUES (%s, %s, %s, %s) "
-                    "ON DUPLICATE KEY UPDATE title=%s, size_bytes=%s, chunk_count=%s",
-                    (filename, doc_title, size_bytes, chunk_count, doc_title, size_bytes, chunk_count)
-                )
+                # C. Register/Update document in MySQL. Set content_hash = NULL initially
+                if doc_id:
+                    cursor.execute(
+                        "UPDATE documents SET title=%s, size_bytes=%s, chunk_count=%s, content_hash=NULL WHERE id=%s",
+                        (doc_title, size_bytes, chunk_count, doc_id)
+                    )
+                else:
+                    cursor.execute(
+                        "INSERT INTO documents (filename, title, size_bytes, chunk_count, content_hash) "
+                        "VALUES (%s, %s, %s, %s, NULL)",
+                        (filename, doc_title, size_bytes, chunk_count)
+                    )
+                    mysql_conn.commit()
+                    cursor.execute("SELECT id FROM documents WHERE filename = %s", (filename,))
+                    doc_id = cursor.fetchone()[0]
+                
                 mysql_conn.commit()
                 
-                cursor.execute("SELECT id FROM documents WHERE filename = %s", (filename,))
-                doc_id = cursor.fetchone()[0]
+                # Initialize progress tracking
+                chunk_progress[doc_id] = {
+                    "total": chunk_count,
+                    "flushed": 0,
+                    "hash": file_hash
+                }
+                
+                if chunk_count == 0:
+                    # Empty file gets marked completed immediately
+                    cursor.execute(
+                        "UPDATE documents SET content_hash = %s WHERE id = %s",
+                        (file_hash, doc_id)
+                    )
+                    mysql_conn.commit()
                 
                 # D. Add chunks to global queue and flush when threshold reached
                 for chunk_idx, (head, chunk_text) in enumerate(chunks):

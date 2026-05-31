@@ -41,13 +41,15 @@ def cmd_run(args):
     print("=" * 60)
     print("  Chimera Cortex — Document Ingestion CLI")
     print("=" * 60)
-    print(f"  API URL    : {args.api_url}")
-    print(f"  Source Dir : {args.source_dir}")
+    print(f"  API URL       : {args.api_url}")
+    print(f"  Source Dir    : {args.source_dir}")
+    print(f"  Force Rebuild : {args.force_rebuild}")
     print("=" * 60)
 
     # Trigger the run
     resp = _api(args.api_url, "post", "/api/ingest/run", json={
         "source_dir": args.source_dir,
+        "force_rebuild": args.force_rebuild,
     })
 
     if resp.status_code == 400:
@@ -159,6 +161,11 @@ sub-commands (positional):
         "--source-dir",
         default="documents",
         help="Path to source directory of markdown documents (default: documents)",
+    )
+    parser.add_argument(
+        "--force-rebuild",
+        action="store_true",
+        help="Force dropping and rebuilding the index (default: False)",
     )
     args = parser.parse_args()
 
