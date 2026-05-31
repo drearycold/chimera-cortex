@@ -18,6 +18,7 @@ from cortex.database import (
 )
 from cortex.rag import rerank_documents
 from cortex.benchmark import manager as benchmark_manager
+from cortex.ingest import manager as ingest_manager
 
 app = FastAPI(title="Chimera Cortex: An Omni-Context Knowledge Engine")
 
@@ -25,6 +26,10 @@ class BenchmarkRunRequest(BaseModel):
     dataset: str = "benchmark_dataset.json"
     judge_model: str = "qwen3.5:9b"
     reuse_cache: bool = False
+
+class IngestRequest(BaseModel):
+    source_dir: str = "documents"
+
 
 @app.on_event("startup")
 def startup_event():
@@ -464,6 +469,29 @@ async def api_delete_benchmark(run_id: int):
         raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+# Ingestion APIs
+@app.get("/api/ingest/status")
+async def api_ingest_status():
+    return ingest_manager.get_status()
+
+@app.post("/api/ingest/run")
+async def api_run_ingest(req: IngestRequest):
+    status = ingest_manager.get_status()
+    if status["status"] == "running":
+        raise HTTPException(status_code=400, detail="An ingestion run is already in progress.")
+    try:
+        ingest_manager.start(source_dir=req.source_dir)
+        return {"message": "Ingestion started successfully."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start ingestion: {str(e)}")
+
+@app.post("/api/ingest/stop")
+async def api_stop_ingest():
+    stopped = ingest_manager.stop()
+    if stopped:
+        return {"message": "Ingestion cancellation signal sent successfully."}
+    return {"message": "No active ingestion run found to cancel."}
 
 # Mount static web directory
 static_dir = os.path.join(os.path.dirname(__file__), "static")

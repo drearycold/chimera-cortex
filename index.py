@@ -1,222 +1,173 @@
 #!/usr/bin/env python3
 """
-Chimera Cortex — Ingestion Pipeline
-===================================
-Discovers corpus manuscripts, uploads raw Markdown documents to MinIO,
-registers metadata in MySQL, chunks sections, generates embeddings,
-and stores vector vectors inside Infinity DB.
+Chimera Cortex — Ingestion CLI (HTTP API Wrapper)
+================================================
+A thin CLI client that triggers and monitors document ingestion runs through
+the running web application's HTTP API. All core ingestion logic lives in
+cortex/ingest.py and is executed server-side.
+
+Usage:
+    python index.py                             # Ingest default directory and poll progress
+    python index.py --api-url http://10.0.0.5:8000
+    python index.py --source-dir servant_lore_md_v3
+    python index.py status                      # Show current ingestion status
+    python index.py stop                        # Cancel the active ingestion run
 """
 
-import os
+import argparse
 import sys
-import glob
-import io
+import time
 import httpx
-from concurrent.futures import ThreadPoolExecutor
 
-from cortex.config import INFINITY_API_URL
-from cortex.database import get_mysql_connection, get_minio_client
-from cortex.rag import parse_document_title, chunk_markdown, get_embedding
+from cortex.config import DEFAULT_API_URL
+
+POLL_INTERVAL = 1  # seconds between status polls
+
+def _api(base: str, method: str, path: str, **kwargs) -> httpx.Response:
+    """Perform an HTTP request against the RAG API and exit on hard errors."""
+    url = f"{base.rstrip('/')}{path}"
+    try:
+        resp = getattr(httpx, method)(url, timeout=30.0, **kwargs)
+        return resp
+    except httpx.ConnectError:
+        print(f"[ERROR] Cannot connect to {base}. Is the server running?")
+        sys.exit(1)
+    except Exception as e:
+        print(f"[ERROR] HTTP {method.upper()} {url} failed: {e}")
+        sys.exit(1)
+
+def cmd_run(args):
+    """Trigger a new ingestion run via POST /api/ingest/run and poll progress."""
+    print("=" * 60)
+    print("  Chimera Cortex — Document Ingestion CLI")
+    print("=" * 60)
+    print(f"  API URL    : {args.api_url}")
+    print(f"  Source Dir : {args.source_dir}")
+    print("=" * 60)
+
+    # Trigger the run
+    resp = _api(args.api_url, "post", "/api/ingest/run", json={
+        "source_dir": args.source_dir,
+    })
+
+    if resp.status_code == 400:
+        data = resp.json()
+        print(f"[WARN] {data.get('detail', 'Ingestion is already running.')}")
+        sys.exit(1)
+    elif resp.status_code != 200:
+        print(f"[ERROR] Server returned {resp.status_code}: {resp.text}")
+        sys.exit(1)
+
+    print("\n[INFO] Ingestion started on the server.")
+    print(f"[INFO] Polling for progress every {POLL_INTERVAL}s (Ctrl+C to detach or stop)...\n")
+
+    # Poll for progress
+    last_processed = -1
+    try:
+        while True:
+            time.sleep(POLL_INTERVAL)
+
+            # Check status
+            status_resp = _api(args.api_url, "get", "/api/ingest/status")
+            if status_resp.status_code != 200:
+                continue
+            status_data = status_resp.json()
+
+            status = status_data.get("status", "unknown")
+            processed = status_data.get("processed_files", 0)
+            total = status_data.get("total_files", 0)
+            current = status_data.get("current_file", "")
+            chunks = status_data.get("total_chunks_indexed", 0)
+
+            if total > 0 and processed != last_processed:
+                pct = (processed / total * 100) if total else 0
+                bar_len = 30
+                filled = int(bar_len * processed / total) if total else 0
+                bar = "█" * filled + "░" * (bar_len - filled)
+                print(f"  [{bar}] {processed}/{total} ({pct:.0f}%)  current='{current}'  chunks={chunks}  status={status}")
+                last_processed = processed
+
+            # Check terminal states
+            if status in ("completed", "failed", "cancelled"):
+                print(f"\n{'=' * 60}")
+                print(f"  Ingestion finished — status: {status}")
+                if status == "completed":
+                    print(f"  Processed Files     : {processed}")
+                    print(f"  Total Chunks Indexed: {chunks}")
+                elif status == "failed":
+                    print(f"  Error Message       : {status_data.get('error_message')}")
+                print(f"{'=' * 60}")
+                return
+
+    except KeyboardInterrupt:
+        print("\n\n[INFO] Detached from progress polling. The ingestion run continues on the server.")
+        print(f"[INFO] Re-attach:  python index.py status")
+        print(f"[INFO] Stop it:    python index.py stop")
+
+def cmd_status(args):
+    """Show the current ingestion status."""
+    resp = _api(args.api_url, "get", "/api/ingest/status")
+    data = resp.json()
+    status = data.get("status", "unknown")
+    processed = data.get("processed_files", 0)
+    total = data.get("total_files", 0)
+    current = data.get("current_file", "")
+    chunks = data.get("total_chunks_indexed", 0)
+
+    print(f"Ingestion Status     : {status}")
+    if status == "running":
+        pct = (processed / total * 100) if total else 0
+        print(f"Progress             : {processed}/{total} ({pct:.0f}%)")
+        print(f"Current File         : {current}")
+        print(f"Total Chunks Indexed : {chunks}")
+    elif status == "completed":
+        print(f"Successfully processed {processed} files.")
+        print(f"Total Chunks Indexed : {chunks}")
+    elif status == "failed":
+        print(f"Ingestion failed: {data.get('error_message')}")
+
+def cmd_stop(args):
+    """Cancel the currently running ingestion."""
+    resp = _api(args.api_url, "post", "/api/ingest/stop")
+    data = resp.json()
+    print(data.get("message", "Done."))
 
 def main():
-    print("=== Starting Ingestion Pipeline (Direct HTTP) ===")
-    
-    # 1. Connect to MinIO
-    print("Connecting to MinIO...")
-    try:
-        minio_client = get_minio_client()
-        bucket_name = "cortex-documents"
-        if not minio_client.bucket_exists(bucket_name):
-            minio_client.make_bucket(bucket_name)
-            print(f"Created MinIO bucket '{bucket_name}'")
-        else:
-            print(f"MinIO bucket '{bucket_name}' already exists.")
-    except Exception as e:
-        print(f"FAILED to connect to MinIO: {e}")
-        sys.exit(1)
-        
-    # 2. Connect to MySQL & Setup Relational DB
-    print("Connecting to MySQL...")
-    try:
-        # Establish base connection to setup DB if not exists
-        from cortex.config import MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASS
-        import mysql.connector
-        mysql_conn = mysql.connector.connect(
-            host=MYSQL_HOST,
-            port=MYSQL_PORT,
-            user=MYSQL_USER,
-            password=MYSQL_PASS
-        )
-        cursor = mysql_conn.cursor()
-        cursor.execute("CREATE DATABASE IF NOT EXISTS cortex_rag")
-        cursor.execute("USE cortex_rag")
-        
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS documents (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            filename VARCHAR(255) UNIQUE NOT NULL,
-            title VARCHAR(255) NOT NULL,
-            size_bytes INT NOT NULL,
-            chunk_count INT NOT NULL
-        )
-        """)
-        mysql_conn.commit()
-        print("MySQL Database & Tables set up successfully.")
-    except Exception as e:
-        print(f"FAILED to connect/setup MySQL: {e}")
-        sys.exit(1)
-        
-    # 3. Connect to Infinity & Setup Vector DB (HTTP REST API)
-    print("Connecting to Infinity Vector DB (HTTP)...")
-    try:
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
-        # Drop table if exists
-        try:
-            res_del = httpx.request(
-                "DELETE",
-                f"{INFINITY_API_URL}/databases/default_db/tables/chunks",
-                json={},
-                headers=headers,
-                timeout=5.0
-            )
-            if res_del.status_code == 200:
-                print("Dropped existing Infinity table 'chunks'.")
-            else:
-                print(f"Table drop info: {res_del.text}")
-        except Exception as e:
-            print(f"Ignore drop table warning: {e}")
-            
-        # Create Table chunks
-        payload = {
-            "fields": [
-                {"name": "document_id", "type": "integer"},
-                {"name": "chunk_index", "type": "integer"},
-                {"name": "document_title", "type": "varchar"},
-                {"name": "content", "type": "varchar"},
-                {"name": "vec", "type": "vector, 1024, float"}
-            ]
-        }
-        res = httpx.post(f"{INFINITY_API_URL}/databases/default_db/tables/chunks", json=payload, headers=headers, timeout=5.0)
-        res.raise_for_status()
-        if res.json().get("error_code", 0) != 0:
-            raise Exception(res.json().get("error_msg", "Unknown error"))
-            
-        print("Infinity table 'chunks' created successfully.")
-    except Exception as e:
-        print(f"FAILED to connect/setup Infinity: {e}")
-        sys.exit(1)
-        
-    # 4. Search and Process Markdown Files
-    source_dir = "documents"
-    if not os.path.exists(source_dir):
-        source_dir = "servant_lore_md_v3"
-        
-    search_path = os.path.join(source_dir, "*.md")
-    files = glob.glob(search_path)
-    
-    if not files:
-        print(f"No markdown files found in '{source_dir}'. Exiting.")
-        sys.exit(1)
-        
-    print(f"Found {len(files)} markdown files to process from '{source_dir}'.")
-    
-    doc_success_count = 0
-    total_chunks_indexed = 0
-    
-    # Establish unified MySQL connection
-    mysql_conn = get_mysql_connection()
-    cursor = mysql_conn.cursor()
-    
-    for file_idx, filepath in enumerate(files, 1):
-        filename = os.path.basename(filepath)
-        doc_title = parse_document_title(filename)
-        
-        print(f"[{file_idx}/{len(files)}] Processing '{filename}' as '{doc_title}'...")
-        
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                content = f.read()
-                
-            content_bytes = content.encode("utf-8")
-            size_bytes = len(content_bytes)
-            
-            # A. Upload raw file to MinIO
-            minio_client.put_object(
-                bucket_name,
-                filename,
-                io.BytesIO(content_bytes),
-                length=size_bytes,
-                content_type="text/markdown"
-            )
-            
-            # B. Chunk markdown
-            chunks = chunk_markdown(content, doc_title)
-            chunk_count = len(chunks)
-            print(f"   -> Split into {chunk_count} semantic chunks.")
-            
-            # C. Register document in MySQL
-            cursor.execute(
-                "INSERT INTO documents (filename, title, size_bytes, chunk_count) VALUES (%s, %s, %s, %s) "
-                "ON DUPLICATE KEY UPDATE title=%s, size_bytes=%s, chunk_count=%s",
-                (filename, doc_title, size_bytes, chunk_count, doc_title, size_bytes, chunk_count)
-            )
-            mysql_conn.commit()
-            
-            cursor.execute("SELECT id FROM documents WHERE filename = %s", (filename,))
-            doc_id = cursor.fetchone()[0]
-            
-            # D. Concurrently generate embeddings & insert into Infinity (HTTP)
-            infinity_batch = []
-            
-            def embed_chunk(chunk_data):
-                chunk_idx, heading, chunk_text = chunk_data
-                emb = get_embedding(chunk_text)
-                return chunk_idx, chunk_text, emb
- 
-            chunk_inputs = [(idx, head, text) for idx, (head, text) in enumerate(chunks)]
-            
-            # Use a pool of 16 threads for parallel Ollama embedding requests
-            with ThreadPoolExecutor(max_workers=16) as executor:
-                results = list(executor.map(embed_chunk, chunk_inputs))
-                
-            for chunk_idx, chunk_text, emb in results:
-                if emb is None:
-                    print(f"      [Warning] Failed to generate embedding for chunk {chunk_idx}. Skipping.")
-                    continue
-                
-                infinity_batch.append({
-                    "document_id": doc_id,
-                    "chunk_index": chunk_idx,
-                    "document_title": doc_title,
-                    "content": chunk_text,
-                    "vec": emb
-                })
-                
-            if infinity_batch:
-                # Direct HTTP POST to table/docs
-                docs_res = httpx.post(
-                    f"{INFINITY_API_URL}/databases/default_db/tables/chunks/docs",
-                    json=infinity_batch,
-                    headers=headers,
-                    timeout=30.0
-                )
-                docs_res.raise_for_status()
-                if docs_res.json().get("error_code", 0) != 0:
-                    raise Exception(docs_res.json().get("error_msg"))
-                total_chunks_indexed += len(infinity_batch)
-                
-            doc_success_count += 1
-            
-        except Exception as e:
-            print(f"   [ERROR] Failed to ingest '{filename}': {e}")
-            mysql_conn.rollback()
-            
-    cursor.close()
-    mysql_conn.close()
-    print(f"\n=== Ingestion Complete ===")
-    print(f"Successfully processed {doc_success_count}/{len(files)} files.")
-    print(f"Indexed a total of {total_chunks_indexed} chunks into Infinity Vector DB.")
-    print("==========================")
+    parser = argparse.ArgumentParser(
+        description="Chimera Cortex — Ingestion CLI (API Client)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+sub-commands (positional):
+  run       Start a new document ingestion run (default when no sub-command given)
+  status    Show current ingestion progress
+  stop      Cancel the active ingestion run
+""",
+    )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        default="run",
+        choices=["run", "status", "stop"],
+        help="Sub-command to execute (default: run)",
+    )
+    parser.add_argument(
+        "--api-url",
+        default=DEFAULT_API_URL,
+        help=f"Base URL of the RAG API (default: {DEFAULT_API_URL})",
+    )
+    parser.add_argument(
+        "--source-dir",
+        default="documents",
+        help="Path to source directory of markdown documents (default: documents)",
+    )
+    args = parser.parse_args()
+
+    dispatch = {
+        "run": cmd_run,
+        "status": cmd_status,
+        "stop": cmd_stop,
+    }
+    dispatch[args.command](args)
 
 if __name__ == "__main__":
     main()
