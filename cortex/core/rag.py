@@ -17,8 +17,8 @@ def parse_document_title(filename):
     # Otherwise general clean up
     return base.replace("_", " ").replace(".md", "")
 
-def chunk_markdown(content, doc_title, max_chars=800):
-    """Split markdown text into semantically cohesive, heading-aware chunks under 800 characters."""
+def chunk_markdown(content, doc_title, max_chars=600, overlap_chars=120):
+    """Split markdown text into semantically cohesive, heading-aware chunks with overlap."""
     lines = content.split("\n")
     current_heading = "Overview"
     paragraphs = []
@@ -45,19 +45,81 @@ def chunk_markdown(content, doc_title, max_chars=800):
     if current_para:
         paragraphs.append((current_heading, "\n".join(current_para)))
         
+    # Split oversized paragraphs/tables into smaller sub-paragraphs
+    split_paragraphs = []
+    for heading, text in paragraphs:
+        prefix = f"[{doc_title} - {heading}] "
+        if len(prefix) + len(text) > max_chars:
+            lines_in_para = text.split("\n")
+            current_sub = []
+            current_sub_len = 0
+            for l in lines_in_para:
+                line_len = len(l)
+                # Cap split sub-paragraphs to leave space for prefix and safe buffer
+                if current_sub_len + line_len + (1 if current_sub else 0) > (max_chars - len(prefix) - 40):
+                    if current_sub:
+                        split_paragraphs.append((heading, "\n".join(current_sub)))
+                    current_sub = [l]
+                    current_sub_len = line_len
+                else:
+                    current_sub.append(l)
+                    current_sub_len += line_len + 1
+            if current_sub:
+                split_paragraphs.append((heading, "\n".join(current_sub)))
+        else:
+            split_paragraphs.append((heading, text))
+        
     chunks = []
     current_chunk = []
     current_len = 0
     current_head = "Overview"
     
-    for heading, text in paragraphs:
+    for heading, text in split_paragraphs:
         prefix = f"[{doc_title} - {heading}] "
         full_text = prefix + text
         
         if current_len + len(full_text) > max_chars and current_chunk:
-            chunks.append((current_head, "\n\n".join(current_chunk)))
-            current_chunk = [full_text]
-            current_len = len(full_text)
+            chunk_content = "\n\n".join(current_chunk)
+            chunks.append((current_head, chunk_content))
+            
+            # Construct overlap for the next chunk
+            if overlap_chars > 0:
+                overlap_elements = []
+                overlap_len = 0
+                for item in reversed(current_chunk):
+                    if item.startswith("..."):
+                        continue
+                    if overlap_len + len(item) + (2 if overlap_elements else 0) <= overlap_chars:
+                        overlap_elements.insert(0, item)
+                        overlap_len += len(item) + 2
+                    else:
+                        break
+                
+                if overlap_elements:
+                    current_chunk = overlap_elements + [full_text]
+                    current_len = sum(len(x) + 2 for x in current_chunk) - 2
+                else:
+                    # Fallback to character slicing of the last paragraph
+                    last_item = current_chunk[-1]
+                    if last_item.startswith("..."):
+                        overlap_text = last_item
+                    else:
+                        overlap_text = last_item[-overlap_chars:]
+                        first_space = overlap_text.find(" ")
+                        if first_space != -1 and first_space < 30:
+                            overlap_text = overlap_text[first_space + 1:]
+                        if overlap_text:
+                            overlap_text = f"... {overlap_text.strip()}"
+                    
+                    if overlap_text:
+                        current_chunk = [overlap_text, full_text]
+                        current_len = len(overlap_text) + 2 + len(full_text)
+                    else:
+                        current_chunk = [full_text]
+                        current_len = len(full_text)
+            else:
+                current_chunk = [full_text]
+                current_len = len(full_text)
             current_head = heading
         else:
             current_chunk.append(full_text)
@@ -68,19 +130,44 @@ def chunk_markdown(content, doc_title, max_chars=800):
         
     return chunks
 
-def get_embedding(text):
-    """Query the local Ollama service to generate a 1024-dimensional dense vector embedding."""
+def get_embedding(text, is_query=False):
+    """Query the local Ollama service to generate a dense vector embedding."""
     try:
+        prefix = "search_query: " if is_query else "search_document: "
+        prefixed_text = prefix + text
+        embed_url = OLLAMA_EMBED_URL.replace("/api/embeddings", "/api/embed")
         r = httpx.post(
-            OLLAMA_EMBED_URL,
-            json={"model": OLLAMA_EMBED_MODEL, "prompt": text},
+            embed_url,
+            json={"model": OLLAMA_EMBED_MODEL, "input": prefixed_text},
             timeout=30.0
         )
         r.raise_for_status()
-        return r.json()["embedding"]
+        res = r.json()
+        if "embeddings" in res:
+            return res["embeddings"][0]
+        return res.get("embedding")
     except Exception as e:
         print(f"[ERROR] Failed calling Ollama embedding API: {e}")
         return None
+
+def get_embeddings_batch(texts):
+    """Query the local Ollama service to generate dense vector embeddings for a list of texts in one batch."""
+    if not texts:
+        return []
+    try:
+        prefixed_texts = [f"search_document: {t}" for t in texts]
+        embed_url = OLLAMA_EMBED_URL.replace("/api/embeddings", "/api/embed")
+        r = httpx.post(
+            embed_url,
+            json={"model": OLLAMA_EMBED_MODEL, "input": prefixed_texts},
+            timeout=60.0
+        )
+        r.raise_for_status()
+        res = r.json()
+        return res.get("embeddings", [])
+    except Exception as e:
+        print(f"[ERROR] Failed calling Ollama batch embedding API: {e}")
+        return [None] * len(texts)
 
 def rerank_documents(query: str, candidates: list) -> list:
     """Rerank candidates using a cross-encoder, applying sigmoid normalization to logits."""

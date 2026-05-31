@@ -8,7 +8,7 @@ from cortex.core.config import (
     OLLAMA_EMBED_MODEL, OLLAMA_GEN_MODEL
 )
 from cortex.core.database import get_mysql_connection, get_redis_client
-from cortex.core.rag import rerank_documents
+from cortex.core.rag import rerank_documents, get_embedding
 
 router = APIRouter(prefix="/api", tags=["Chat"])
 
@@ -34,14 +34,11 @@ async def api_chat(req: ChatRequest):
     except Exception as e:
         print(f"[Warning] Redis cache connection failed: {e}")
 
-    # 2. Get Query Embedding from Ollama (bge-m3)
+    # 2. Get Query Embedding from Ollama (nomic-embed-text)
     t_embed_start = time.time()
-    try:
-        resp = httpx.post(OLLAMA_EMBED_URL, json={"model": OLLAMA_EMBED_MODEL, "prompt": query}, timeout=15.0)
-        resp.raise_for_status()
-        query_vector = resp.json()["embedding"]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to generate query embedding via Ollama: {str(e)}")
+    query_vector = get_embedding(query, is_query=True)
+    if not query_vector:
+        raise HTTPException(status_code=500, detail="Failed to generate query embedding via Ollama.")
     embedding_ms = (time.time() - t_embed_start) * 1000.0
 
     # 3. Retrieve Closest Chunks from Infinity DB (HTTP) - Get topn=10 for Reranking
@@ -58,7 +55,7 @@ async def api_chat(req: ChatRequest):
                     "query_vector": query_vector,
                     "element_type": "float",
                     "metric_type": "ip",
-                    "topn": 10
+                    "topn": 20
                 }
             ]
         }
@@ -160,8 +157,8 @@ async def api_chat(req: ChatRequest):
                 "rank": i + 1
             })
             
-        # Select top_k = 3 most relevant chunks after rerank scoring
-        contexts = contexts[:3]
+        # Select top_k = 5 most relevant chunks after rerank scoring
+        contexts = contexts[:5]
     rerank_ms = (time.time() - t_rerank_start) * 1000.0
 
     # 5. Generate RAG Response via Ollama (qwen2.5:3b)

@@ -58,7 +58,7 @@ def clean_index():
                 {"name": "chunk_index", "type": "integer"},
                 {"name": "document_title", "type": "varchar"},
                 {"name": "content", "type": "varchar"},
-                {"name": "vec", "type": "vector, 1024, float"}
+                {"name": "vec", "type": "vector, 768, float"}
             ]
         }
         res = httpx.post(

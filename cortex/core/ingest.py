@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .config import INFINITY_API_URL
 from .database import get_mysql_connection, get_minio_client
-from .rag import parse_document_title, chunk_markdown, get_embedding
+from .rag import parse_document_title, chunk_markdown, get_embedding, get_embeddings_batch
 
 class IngestManager:
     """Thread-safe manager ensuring at most one ingestion run is in progress."""
@@ -165,7 +165,7 @@ class IngestManager:
                     {"name": "chunk_index", "type": "integer"},
                     {"name": "document_title", "type": "varchar"},
                     {"name": "content", "type": "varchar"},
-                    {"name": "vec", "type": "vector, 1024, float"}
+                    {"name": "vec", "type": "vector, 768, float"}
                 ]
             }
             res = httpx.post(f"{INFINITY_API_URL}/databases/default_db/tables/chunks", json=payload, headers=headers, timeout=5.0)
@@ -252,21 +252,15 @@ class IngestManager:
                 cursor.execute("SELECT id FROM documents WHERE filename = %s", (filename,))
                 doc_id = cursor.fetchone()[0]
                 
-                # D. Concurrently generate embeddings & insert into Infinity (HTTP)
+                # D. Generate embeddings in one batch request & insert into Infinity (HTTP)
                 infinity_batch = []
+                chunk_texts = [text for head, text in chunks]
                 
-                def embed_chunk(chunk_data):
-                    chunk_idx, heading, chunk_text = chunk_data
-                    emb = get_embedding(chunk_text)
-                    return chunk_idx, chunk_text, emb
-     
-                chunk_inputs = [(idx, head, text) for idx, (head, text) in enumerate(chunks)]
+                # Retrieve all embeddings in one single batch HTTP call
+                embeddings = get_embeddings_batch(chunk_texts)
                 
-                # Use a pool of 16 threads for parallel Ollama embedding requests
-                with ThreadPoolExecutor(max_workers=16) as executor:
-                    results = list(executor.map(embed_chunk, chunk_inputs))
-                    
-                for chunk_idx, chunk_text, emb in results:
+                for chunk_idx, (head, chunk_text) in enumerate(chunks):
+                    emb = embeddings[chunk_idx] if chunk_idx < len(embeddings) else None
                     if emb is None:
                         print(f"      [Warning] Failed to generate embedding for chunk {chunk_idx}. Skipping.")
                         continue
