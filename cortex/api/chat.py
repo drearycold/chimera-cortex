@@ -47,7 +47,7 @@ async def api_chat(req: ChatRequest):
     try:
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         search_payload = {
-            "output": ["document_id", "chunk_index", "content", "document_title", "similarity()"],
+            "output": ["document_id", "chunk_index", "content", "document_title", "score()"],
             "search": [
                 {
                     "match_method": "dense",
@@ -55,6 +55,16 @@ async def api_chat(req: ChatRequest):
                     "query_vector": query_vector,
                     "element_type": "float",
                     "metric_type": "ip",
+                    "topn": 20
+                },
+                {
+                    "match_method": "text",
+                    "fields": "content",
+                    "matching_text": query,
+                    "topn": 20
+                },
+                {
+                    "fusion_method": "rrf",
                     "topn": 20
                 }
             ]
@@ -98,7 +108,7 @@ async def api_chat(req: ChatRequest):
             doc_id = row.get("document_id")
             content = row.get("content", "")
             doc_title = row.get("document_title", "")
-            distance = row.get("SIMILARITY") or row.get("similarity") or row.get("score") or (1.0 - (idx * 0.1))
+            distance = row.get("SIMILARITY") or row.get("similarity") or row.get("SCORE") or row.get("score") or (1.0 - (idx * 0.1))
             
             filename = "Unknown Source"
             if doc_id is not None:

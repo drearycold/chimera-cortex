@@ -205,6 +205,25 @@ class IngestManager:
                         raise Exception(err_msg)
                 else:
                     print("[INGEST] Infinity table 'chunks' created successfully.")
+            
+            # Create Full-Text index on 'content'
+            try:
+                idx_payload = {
+                    "create_option": "ignore_if_exists",
+                    "fields": ["content"],
+                    "index": {
+                        "type": "FULLTEXT",
+                        "params": {"analyzer": "standard"}
+                    }
+                }
+                idx_res = httpx.post(f"{INFINITY_API_URL}/databases/default_db/tables/chunks/indexes/content_fts", json=idx_payload, headers=headers, timeout=10.0)
+                idx_res.raise_for_status()
+                if idx_res.json().get("error_code", 0) == 0:
+                    print("[INGEST] Infinity full-text index 'content_fts' verified/created.")
+                else:
+                    print(f"[INGEST] Warning creating full-text index: {idx_res.text}")
+            except Exception as e:
+                print(f"[INGEST] Warning creating full-text index: {e}")
         except Exception as e:
             raise Exception(f"FAILED to connect/setup Infinity: {e}")
             
