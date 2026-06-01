@@ -242,9 +242,12 @@ def decompose_query(query: str) -> list[str]:
                 "model": OLLAMA_GEN_MODEL,
                 "prompt": prompt,
                 "stream": False,
-                "options": {"temperature": 0.0}
+                "options": {
+                    "temperature": 0.0,
+                    "num_ctx": 8192
+                }
             },
-            timeout=30.0
+            timeout=45.0
         )
         resp.raise_for_status()
         response_text = resp.json()["response"].strip()

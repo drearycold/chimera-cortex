@@ -115,7 +115,10 @@ def call_judge(
             "prompt": full_prompt,
             "stream": False,
             "think": False,
-            "options": {"temperature": 0.0},
+            "options": {
+                "temperature": 0.0,
+                "num_ctx": 8192
+            },
         },
         timeout=timeout,
     )

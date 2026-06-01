@@ -269,10 +269,11 @@ async def api_chat(req: ChatRequest):
                 "prompt": full_prompt,
                 "stream": False,
                 "options": {
-                    "temperature": 0.3
+                    "temperature": 0.3,
+                    "num_ctx": 8192
                 }
             },
-            timeout=90.0
+            timeout=120.0
         )
         r.raise_for_status()
         answer = r.json()["response"].strip()

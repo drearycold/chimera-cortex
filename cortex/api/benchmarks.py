@@ -83,7 +83,7 @@ async def api_run_benchmark(req: BenchmarkRunRequest):
             ollama_host=ollama_host,
             reuse_cache=req.reuse_cache,
             delay=1.0,
-            timeout=90.0
+            timeout=150.0
         )
         return {"message": "Benchmark started successfully.", "run_id": run_id}
     except Exception as e:
