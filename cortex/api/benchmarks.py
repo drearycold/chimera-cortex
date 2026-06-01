@@ -15,6 +15,7 @@ class BenchmarkRunRequest(BaseModel):
     dataset: str = "benchmark_dataset.json"
     judge_model: str = "qwen3.5:9b"
     reuse_cache: bool = False
+    comment: str = None
 
 @router.get("/benchmarks")
 async def api_get_benchmarks():
@@ -66,7 +67,7 @@ async def api_run_benchmark(req: BenchmarkRunRequest):
     
     # Save a run entry as 'running'
     try:
-        run_id = save_benchmark_run(dataset_name, req.judge_model, total_q)
+        run_id = save_benchmark_run(dataset_name, req.judge_model, total_q, req.comment)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save benchmark run to DB: {str(e)}")
         

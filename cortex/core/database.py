@@ -154,9 +154,18 @@ def init_db():
             avg_faithfulness FLOAT DEFAULT 0.0,
             avg_relevance FLOAT DEFAULT 0.0,
             pass_rate FLOAT DEFAULT 0.0,
-            status VARCHAR(50) DEFAULT 'running'
+            status VARCHAR(50) DEFAULT 'running',
+            comment TEXT
         )
         """)
+
+        # Ensure comment column exists for older database installations
+        try:
+            cursor.execute("ALTER TABLE benchmark_runs ADD COLUMN comment TEXT")
+        except mysql.connector.Error as err:
+            # 1060: Duplicate column name, meaning it already exists
+            if err.errno != 1060:
+                raise err
 
         # 3. benchmark_results table
         cursor.execute("""
@@ -192,14 +201,14 @@ def init_db():
     except Exception as e:
         print(f"[DB Warning] Database tables initialization bypassed or failed: {e}")
 
-def save_benchmark_run(dataset_name: str, judge_model: str, total_questions: int) -> int:
+def save_benchmark_run(dataset_name: str, judge_model: str, total_questions: int, comment: str = None) -> int:
     """Insert a new benchmark run and return its run_id."""
     conn = get_mysql_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO benchmark_runs (dataset_name, judge_model, total_questions, status)
-        VALUES (%s, %s, %s, 'running')
-    """, (dataset_name, judge_model, total_questions))
+        INSERT INTO benchmark_runs (dataset_name, judge_model, total_questions, status, comment)
+        VALUES (%s, %s, %s, 'running', %s)
+    """, (dataset_name, judge_model, total_questions, comment))
     conn.commit()
     run_id = cursor.lastrowid
     cursor.close()

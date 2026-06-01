@@ -471,6 +471,16 @@ document.addEventListener("DOMContentLoaded", () => {
             runDatasetText.textContent = activeRunDetail.dataset_name;
             runJudgeText.textContent = activeRunDetail.judge_model;
 
+            // Display Comment / Code Changes
+            const runCommentContainer = document.getElementById("run-comment-container");
+            const runCommentText = document.getElementById("run-comment-text");
+            if (activeRunDetail.comment) {
+                runCommentText.textContent = activeRunDetail.comment;
+                runCommentContainer.style.display = "flex";
+            } else {
+                runCommentContainer.style.display = "none";
+            }
+
             // Fill KPI Cards
             kpiCorrectness.innerHTML = `${activeRunDetail.avg_correctness.toFixed(2)}<span class="kpi-suffix">/ 5</span>`;
             kpiCorrectness.style.color = getScoreColor(activeRunDetail.avg_correctness);
@@ -871,9 +881,10 @@ document.addEventListener("DOMContentLoaded", () => {
     
     // Trigger benchmark execution
     btnRunBenchmark.addEventListener("click", async () => {
-        const dataset = datasetSelect.value;
-        const judgeModel = judgeSelect.value;
-        const reuseCache = reuseCacheCheck.checked;
+        const dataset = document.getElementById("dataset-select").value;
+        const judge = document.getElementById("judge-select").value;
+        const reuseCache = document.getElementById("reuse-cache-check").checked;
+        const comment = document.getElementById("benchmark-comment").value.trim();
 
         btnRunBenchmark.style.display = "none";
         btnStopBenchmark.style.display = "inline-block";
@@ -884,10 +895,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     dataset: dataset,
-                    judge_model: judgeModel,
-                    reuse_cache: reuseCache
+                    judge_model: judge,
+                    reuse_cache: reuseCache,
+                    comment: comment || null
                 })
             });
+
+            // Clear the comment input after triggering
+            document.getElementById("benchmark-comment").value = "";
 
             if (!res.ok) {
                 const data = await res.json();

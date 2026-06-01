@@ -142,6 +142,10 @@
                         <input type="checkbox" id="reuse-cache-check">
                         <label for="reuse-cache-check">Reuse Redis Cache</label>
                     </div>
+                    <div class="control-row">
+                        <label for="benchmark-comment">Run Comment / Changes</label>
+                        <input type="text" id="benchmark-comment" class="sidebar-input" placeholder="e.g. Phase 3 rerank fix">
+                    </div>
                     <div class="control-actions">
                         <button id="btn-run-benchmark" class="benchmark-btn primary">✦ Run Benchmark</button>
                         <button id="btn-stop-benchmark" class="benchmark-btn danger" style="display: none;">■ Stop Run</button>
@@ -180,6 +184,15 @@
                         </div>
                         <div class="detail-actions">
                             <button id="btn-delete-run" class="delete-run-btn">🗑 Delete Run</button>
+                        </div>
+                    </div>
+
+                    <!-- Run Description/Comment -->
+                    <div id="run-comment-container" class="run-comment-box" style="display: none;">
+                        <span class="comment-icon">📝</span>
+                        <div class="comment-body">
+                            <span class="comment-label">Notes / Code Changes:</span>
+                            <p id="run-comment-text"></p>
                         </div>
                     </div>
 

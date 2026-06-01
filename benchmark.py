@@ -52,6 +52,8 @@ def cmd_run(args):
     print(f"  Dataset     : {args.dataset}")
     print(f"  Judge Model : {args.judge_model}")
     print(f"  Reuse Cache : {args.reuse_cache}")
+    if args.comment:
+        print(f"  Comment     : {args.comment}")
     print("=" * 60)
 
     # Trigger the run
@@ -59,6 +61,7 @@ def cmd_run(args):
         "dataset": args.dataset,
         "judge_model": args.judge_model,
         "reuse_cache": args.reuse_cache,
+        "comment": args.comment,
     })
 
     if resp.status_code == 400:
@@ -153,6 +156,8 @@ def cmd_status(args):
             done = len(run.get("results", []))
             pct = (done / total * 100) if total else 0
             print(f"Progress        : {done}/{total} ({pct:.0f}%)")
+            if run.get("comment"):
+                print(f"Comment         : {run['comment']}")
     else:
         print("No benchmark is currently running.")
 
@@ -167,15 +172,18 @@ def cmd_list(args):
         print("No benchmark runs found.")
         return
 
-    print(f"{'ID':>5}  {'Status':<12}  {'Dataset':<28}  {'Judge':<16}  {'Score':>6}  {'Pass%':>6}  {'Created'}")
-    print("-" * 100)
+    print(f"{'ID':>5}  {'Status':<12}  {'Dataset':<28}  {'Judge':<16}  {'Score':>6}  {'Pass%':>6}  {'Comment':<30}  {'Created'}")
+    print("-" * 135)
     for r in runs:
         score = r.get("avg_correctness", 0)
         pr = r.get("pass_rate", 0)
+        comment = r.get("comment", "") or ""
+        if len(comment) > 28:
+            comment = comment[:25] + "..."
         print(
             f"{r['id']:>5}  {r.get('status','?'):<12}  "
             f"{r.get('dataset_name','?'):<28}  {r.get('judge_model','?'):<16}  "
-            f"{score:>5.2f}  {pr:>5.1f}  {r.get('created_at','?')}"
+            f"{score:>5.2f}  {pr:>5.1f}  {comment:<30}  {r.get('created_at','?')}"
         )
 
 
@@ -228,6 +236,12 @@ sub-commands (positional):
         action="store_true",
         default=False,
         help="Skip cache flush and reuse existing Redis cache",
+    )
+    parser.add_argument(
+        "--comment",
+        "-m",
+        default=None,
+        help="Comment/notes to describe the benchmark run (e.g. code changes made)",
     )
     args = parser.parse_args()
 

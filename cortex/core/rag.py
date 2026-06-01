@@ -1,13 +1,17 @@
 import os
 import re
 import math
+import json
 import httpx
 from .config import (
-    OLLAMA_EMBED_URL, OLLAMA_EMBED_MODEL, RERANKER_URL
+    OLLAMA_EMBED_URL, OLLAMA_EMBED_MODEL, RERANKER_URL,
+    OLLAMA_GENERATE_URL, OLLAMA_GEN_MODEL
 )
 
 def parse_document_title(filename):
     """Clean and extract clear, human-readable document titles from filenames."""
+    import unicodedata
+    filename = unicodedata.normalize('NFC', filename)
     base = os.path.basename(filename)
     # Strip numeric prefixes and lore suffixes common in Fate dataset, e.g. 123_Gawain_lore.md -> Gawain
     match = re.match(r"^\d+_(.*)_lore\.md$", base)
@@ -19,6 +23,9 @@ def parse_document_title(filename):
 
 def chunk_markdown(content, doc_title, max_chars=600, overlap_chars=120):
     """Split markdown text into semantically cohesive, heading-aware chunks with overlap."""
+    import unicodedata
+    content = unicodedata.normalize('NFC', content)
+    doc_title = unicodedata.normalize('NFC', doc_title)
     lines = content.split("\n")
     current_heading = "Overview"
     paragraphs = []
@@ -132,6 +139,8 @@ def chunk_markdown(content, doc_title, max_chars=600, overlap_chars=120):
 
 def get_embedding(text, is_query=False):
     """Query the local Ollama service to generate a dense vector embedding."""
+    import unicodedata
+    text = unicodedata.normalize('NFC', text)
     try:
         prefix = "search_query: " if is_query else "search_document: "
         prefixed_text = prefix + text
@@ -212,3 +221,55 @@ def rerank_documents(query: str, candidates: list) -> list:
             c["rerank_logit"] = None
             c["rerank_score"] = None
         return candidates
+
+def decompose_query(query: str) -> list[str]:
+    """Use the generation LLM to decompose a complex query into atomic sub-queries."""
+    import unicodedata
+    query = unicodedata.normalize('NFC', query)
+    prompt = (
+        "You are a search query optimizer. Given a user question, determine if it asks about "
+        "multiple entities or topics. If so, decompose it into 2-3 focused sub-queries, each "
+        "targeting a single entity/topic. If the question is simple and targets one entity, "
+        "return it unchanged.\n\n"
+        "Return ONLY a JSON array of query strings. No explanation.\n\n"
+        f"Question: {query}\n\nSub-queries:"
+    )
+    
+    try:
+        resp = httpx.post(
+            OLLAMA_GENERATE_URL,
+            json={
+                "model": OLLAMA_GEN_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "options": {"temperature": 0.0}
+            },
+            timeout=15.0
+        )
+        resp.raise_for_status()
+        response_text = resp.json()["response"].strip()
+        
+        # Clean response if wrapped in markdown blocks
+        if response_text.startswith("```"):
+            lines = response_text.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            response_text = "\n".join(lines).strip()
+            
+        sub_queries = json.loads(response_text)
+        if isinstance(sub_queries, list) and len(sub_queries) > 0:
+            parsed_queries = []
+            for q in sub_queries:
+                if isinstance(q, dict):
+                    # extract the first string value if it's a dict
+                    val = next(iter(q.values()))
+                    parsed_queries.append(str(val))
+                else:
+                    parsed_queries.append(str(q))
+            return parsed_queries
+    except Exception as e:
+        print(f"[Warning] Query decomposition failed, falling back to original query: {e}")
+        
+    return [query]

@@ -691,6 +691,23 @@ body {
     cursor: pointer;
 }
 
+.sidebar-input {
+    background: #070b13;
+    border: 1px solid var(--glass-border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 12px;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.sidebar-input:focus {
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2);
+}
+
 .control-row-inline {
     display: flex;
     align-items: center;
@@ -867,6 +884,45 @@ body {
     display: flex;
     align-items: center;
     gap: 4px;
+}
+
+/* Run Comment box details */
+.run-comment-box {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    font-size: 13px;
+    animation: fadeIn 0.3s ease-out;
+}
+
+.run-comment-box .comment-icon {
+    font-size: 16px;
+    margin-top: 2px;
+}
+
+.run-comment-box .comment-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.run-comment-box .comment-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.run-comment-box p {
+    margin: 0;
+    color: var(--text-primary);
+    line-height: 1.4;
 }
 
 .score-tag-dot {
