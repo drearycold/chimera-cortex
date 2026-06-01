@@ -244,7 +244,7 @@ def decompose_query(query: str) -> list[str]:
                 "stream": False,
                 "options": {"temperature": 0.0}
             },
-            timeout=15.0
+            timeout=30.0
         )
         resp.raise_for_status()
         response_text = resp.json()["response"].strip()

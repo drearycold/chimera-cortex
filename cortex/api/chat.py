@@ -239,7 +239,7 @@ async def api_chat(req: ChatRequest):
         
     rerank_ms = rerank_total_ms
 
-    # 5. Generate RAG Response via Ollama (qwen2.5:3b)
+    # 5. Generate RAG Response via Ollama (qwen3:8b)
     t_gen_start = time.time()
     if contexts:
         context_str = "\n\n".join([f"--- SOURCE: {c['filename']} ---\n{c['content']}" for c in contexts])
@@ -272,7 +272,7 @@ async def api_chat(req: ChatRequest):
                     "temperature": 0.3
                 }
             },
-            timeout=45.0
+            timeout=90.0
         )
         r.raise_for_status()
         answer = r.json()["response"].strip()
