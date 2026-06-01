@@ -43,10 +43,17 @@ async def api_chat(req: ChatRequest):
 
     # 3. Get Query Embeddings and Retrieve Closest Chunks
     t_embed_start = time.time()
-    sub_query_vectors = []
+    
+    # Setup Entity-Balanced Retrieval Slicing quotas
+    queries_to_run = [(query, 5)]
     for sq in sub_queries:
+        if sq.lower() != query.lower():
+            queries_to_run.append((sq, 3))
+            
+    query_vectors = []
+    for sq, quota in queries_to_run:
         sq_vector = get_embedding(sq, is_query=True)
-        sub_query_vectors.append((sq, sq_vector))
+        query_vectors.append((sq, sq_vector, quota))
     embedding_ms = (time.time() - t_embed_start) * 1000.0
 
     t_retrieval_start = time.time()
@@ -63,7 +70,7 @@ async def api_chat(req: ChatRequest):
         cursor = mysql_conn.cursor()
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         
-        for sq, sq_vector in sub_query_vectors:
+        for sq, sq_vector, quota in query_vectors:
             if not sq_vector:
                 print(f"[Warning] Failed to get embedding for sub-query: {sq}")
                 continue
@@ -161,9 +168,12 @@ async def api_chat(req: ChatRequest):
                 sq_contexts = rerank_documents(sq, sq_contexts)
                 rerank_total_ms += (time.time() - t_rerank_start) * 1000.0
                 
-                # Take top 5 per sub-query
-                sq_contexts = sq_contexts[:5]
-                all_contexts.extend(sq_contexts)
+                # Store all reranked contexts for global quota allocation
+                all_contexts.append({
+                    "sub_query": sq,
+                    "quota": quota,
+                    "contexts": sq_contexts
+                })
                 
     except Exception as e:
         print(f"[Warning] Failed to retrieve context from Infinity/MySQL: {e}")
@@ -175,18 +185,42 @@ async def api_chat(req: ChatRequest):
             
     retrieval_ms = ((time.time() - t_retrieval_start) * 1000.0) - rerank_total_ms
 
-    # Deduplicate contexts by (document_id, chunk_index)
+    # Apply Entity-Balanced Retrieval Slicing (Quota Allocation & Deduplication)
     seen = set()
     contexts = []
-    for c in all_contexts:
-        key = (c["document_id"], c["chunk_index"])
-        if key not in seen:
-            seen.add(key)
-            contexts.append(c)
-            
-    # Sort merged contexts by reranked distance
+    pool = []
+
+    for item in all_contexts:
+        sq = item["sub_query"]
+        quota = item["quota"]
+        sq_contexts = item["contexts"]
+        
+        selected_count = 0
+        for c in sq_contexts:
+            key = (c["document_id"], c["chunk_index"])
+            if key not in seen:
+                c_copy = dict(c)
+                c_copy["sub_query"] = sq
+                if selected_count < quota:
+                    seen.add(key)
+                    contexts.append(c_copy)
+                    selected_count += 1
+                else:
+                    pool.append(c_copy)
+                    
+    # Fill remainder if we have fewer than 10 chunks total (e.g. queries were too similar)
+    if len(contexts) < 10:
+        pool.sort(key=lambda x: x.get("distance", 0.0), reverse=True)
+        for c in pool:
+            key = (c["document_id"], c["chunk_index"])
+            if key not in seen:
+                seen.add(key)
+                contexts.append(c)
+                if len(contexts) >= 10:
+                    break
+                    
+    # Sort final selected contexts globally by reranked distance
     contexts.sort(key=lambda x: x.get("distance", 0.0), reverse=True)
-    contexts = contexts[:10]
     
     for i, c in enumerate(contexts):
         second_stage_candidates.append({
@@ -199,7 +233,8 @@ async def api_chat(req: ChatRequest):
             "first_stage_rank": next((f["rank"] for f in first_stage_candidates if f["filename"] == c["filename"] and f["chunk_index"] == c["chunk_index"]), i + 1),
             "rerank_logit": c.get("rerank_logit"),
             "rerank_score": c.get("rerank_score"),
-            "rank": i + 1
+            "rank": i + 1,
+            "sub_query": c.get("sub_query", "Unknown Query")
         })
         
     rerank_ms = rerank_total_ms

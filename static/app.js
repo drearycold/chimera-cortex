@@ -819,47 +819,87 @@ document.addEventListener("DOMContentLoaded", () => {
             return `<tr><td colspan="5" style="text-align: center; color: var(--text-secondary); padding: 12px;">RAG Backend did not capture telemetry candidate logs.</td></tr>`;
         }
 
-        let rows = "";
-        secondStage.forEach((candidate, idx) => {
-            const fn = candidate.filename;
-            const chunkIdx = candidate.chunk_index;
-            const r1 = candidate.first_stage_rank;
-            const r2 = candidate.rank;
-            const sim = candidate.first_stage_score;
-            const logit = candidate.rerank_logit;
-            const sigmoid = candidate.rerank_score;
-            
-            // Shift
-            const shiftVal = r1 - r2;
-            let shiftBadge = "";
-            if (shiftVal > 0) {
-                shiftBadge = `<span class="shift-badge shift-up">▲ +${shiftVal}</span>`;
-            } else if (shiftVal < 0) {
-                shiftBadge = `<span class="shift-badge shift-down">▼ ${shiftVal}</span>`;
-            } else {
-                shiftBadge = `<span class="shift-badge shift-none">•</span>`;
+        // Group by sub-query
+        const groups = {};
+        const queryOrder = [];
+        
+        secondStage.forEach(candidate => {
+            const sq = candidate.sub_query || "Unknown Query";
+            if (!groups[sq]) {
+                groups[sq] = [];
+                queryOrder.push(sq);
             }
+            groups[sq].push(candidate);
+        });
 
-            // Check if chunk was actually injected into the LLM prompt (dynamic check, no hardcoding)
-            const isInPrompt = item.llm_prompt && item.llm_prompt.includes(candidate.content);
-            const sliceBadge = isInPrompt ? ' <span class="top-slice-badge">PROMPT INJECT</span>' : "";
+        // Sort groups such that the original query group is always first
+        queryOrder.sort((a, b) => {
+            const isAOriginal = a.toLowerCase() === (item.question || "").toLowerCase();
+            const isBOriginal = b.toLowerCase() === (item.question || "").toLowerCase();
+            if (isAOriginal && !isBOriginal) return -1;
+            if (!isAOriginal && isBOriginal) return 1;
+            return 0;
+        });
 
+        let rows = "";
+        let globalIdx = 0;
+
+        queryOrder.forEach(sq => {
+            const isOriginal = sq.toLowerCase() === (item.question || "").toLowerCase();
+            const groupTitle = isOriginal ? `Original Query: "${sq}"` : `Decomposed Query: "${sq}"`;
+            const headerColor = isOriginal ? '#10b981' : '#60a5fa'; // Emerald for original, Blue for decomposed
+            
             rows += `
-                <tr>
-                    <td><b>${fn}</b> (Chunk ${chunkIdx})${sliceBadge}</td>
-                    <td>Rank ${r1} <span style="color: var(--text-secondary)">(${sim.toFixed(4)})</span></td>
-                    <td>Rank ${r2} <span style="color: var(--text-secondary)">(logit: ${logit !== null ? logit.toFixed(2) : 'N/A'} | sig: ${sigmoid !== null ? sigmoid.toFixed(4) : 'N/A'})</span></td>
-                    <td>${shiftBadge}</td>
-                    <td style="text-align: right;">
-                        <button class="view-chunk-btn" data-idx="${idx}">View Text</button>
-                    </td>
-                </tr>
-                <tr>
-                    <td colspan="5" style="padding: 0; border: none;">
-                        <div class="chunk-drawer" id="chunk-text-${item.id}-${idx}">${escapeHtml(candidate.content)}</div>
+                <tr class="subquery-group-hdr" style="background: rgba(255,255,255,0.02);">
+                    <td colspan="5" style="padding: 8px 10px; color: ${headerColor}; font-family: Outfit, sans-serif; font-size: 11px;">
+                        ${groupTitle}
                     </td>
                 </tr>
             `;
+
+            groups[sq].forEach(candidate => {
+                const fn = candidate.filename;
+                const chunkIdx = candidate.chunk_index;
+                const r1 = candidate.first_stage_rank;
+                const r2 = candidate.rank;
+                const sim = candidate.first_stage_score;
+                const logit = candidate.rerank_logit;
+                const sigmoid = candidate.rerank_score;
+                
+                // Shift
+                const shiftVal = r1 - r2;
+                let shiftBadge = "";
+                if (shiftVal > 0) {
+                    shiftBadge = `<span class="shift-badge shift-up">▲ +${shiftVal}</span>`;
+                } else if (shiftVal < 0) {
+                    shiftBadge = `<span class="shift-badge shift-down">▼ ${shiftVal}</span>`;
+                } else {
+                    shiftBadge = `<span class="shift-badge shift-none">•</span>`;
+                }
+
+                // Check if chunk was actually injected into the LLM prompt (dynamic check, no hardcoding)
+                const isInPrompt = item.llm_prompt && item.llm_prompt.includes(candidate.content);
+                const sliceBadge = isInPrompt ? ' <span class="top-slice-badge">PROMPT INJECT</span>' : "";
+
+                const currentIdx = globalIdx++;
+
+                rows += `
+                    <tr>
+                        <td><b>${fn}</b> (Chunk ${chunkIdx})${sliceBadge}</td>
+                        <td>Rank ${r1} <span style="color: var(--text-secondary)">(${sim.toFixed(4)})</span></td>
+                        <td>Rank ${r2} <span style="color: var(--text-secondary)">(logit: ${logit !== null ? logit.toFixed(2) : 'N/A'} | sig: ${sigmoid !== null ? sigmoid.toFixed(4) : 'N/A'})</span></td>
+                        <td>${shiftBadge}</td>
+                        <td style="text-align: right;">
+                            <button class="view-chunk-btn" data-idx="${currentIdx}">View Text</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td colspan="5" style="padding: 0; border: none;">
+                            <div class="chunk-drawer" id="chunk-text-${item.id}-${currentIdx}">${escapeHtml(candidate.content)}</div>
+                        </td>
+                    </tr>
+                `;
+            });
         });
 
         return rows;
