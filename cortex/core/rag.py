@@ -276,3 +276,80 @@ def decompose_query(query: str) -> list[str]:
         print(f"[Warning] Query decomposition failed, falling back to original query: {e}")
         
     return [query]
+
+def fetch_and_merge_context(doc_id: int, chunk_index: int) -> str:
+    """
+    Fetch the chunk itself and its immediately adjacent neighbors (index - 1, index + 1)
+    from Infinity DB, then fuse them cleanly by identifying and resolving overlaps.
+    """
+    from .config import INFINITY_API_URL
+    
+    # Retrieve chunk_index - 1, chunk_index, chunk_index + 1
+    filter_expr = f"document_id = {doc_id} AND chunk_index >= {chunk_index - 1} AND chunk_index <= {chunk_index + 1}"
+    search_payload = {
+        "output": ["chunk_index", "content"],
+        "filter": filter_expr
+    }
+    
+    try:
+        resp = httpx.request(
+            "GET",
+            f"{INFINITY_API_URL}/databases/default_db/tables/chunks/docs",
+            json=search_payload,
+            headers={"Content-Type": "application/json"},
+            timeout=10.0
+        )
+        resp.raise_for_status()
+        res = resp.json()
+        
+        raw_results = []
+        if res.get("error_code", 0) == 0:
+            if "output" in res:
+                raw_results = res["output"]
+            elif "docs" in res:
+                raw_results = res["docs"]
+            elif "rows" in res:
+                raw_results = res["rows"]
+                
+        # Parse and sort by chunk_index
+        parsed_chunks = []
+        for item_list in raw_results:
+            row = {}
+            if isinstance(item_list, list):
+                for item in item_list:
+                    if isinstance(item, dict):
+                        row.update(item)
+            elif isinstance(item_list, dict):
+                row = item_list
+                
+            c_idx = row.get("chunk_index")
+            content = row.get("content")
+            if c_idx is not None and content:
+                parsed_chunks.append({"chunk_index": int(c_idx), "content": content})
+                
+        parsed_chunks.sort(key=lambda x: x["chunk_index"])
+        
+        if not parsed_chunks:
+            return ""
+            
+        # Merge overlapping text
+        merged = parsed_chunks[0]["content"]
+        for i in range(1, len(parsed_chunks)):
+            curr = parsed_chunks[i]["content"]
+            overlap_found = False
+            # Look for overlap up to 250 characters
+            for overlap_len in range(min(len(merged), len(curr), 250), 10, -1):
+                if merged[-overlap_len:] == curr[:overlap_len]:
+                    merged += curr[overlap_len:]
+                    overlap_found = True
+                    break
+            if not overlap_found:
+                # Fallback: simple concatenate with newline separation
+                merged += "\n\n" + curr
+                
+        return merged
+        
+    except Exception as e:
+        print(f"[Warning] Failed to fetch or merge adjacent chunks for doc_id={doc_id}, chunk={chunk_index}: {e}")
+        return ""
+

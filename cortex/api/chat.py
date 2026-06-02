@@ -8,7 +8,7 @@ from cortex.core.config import (
     OLLAMA_EMBED_MODEL, OLLAMA_GEN_MODEL
 )
 from cortex.core.database import get_mysql_connection, get_redis_client
-from cortex.core.rag import rerank_documents, get_embedding, decompose_query
+from cortex.core.rag import rerank_documents, get_embedding, decompose_query, fetch_and_merge_context
 
 router = APIRouter(prefix="/api", tags=["Chat"])
 
@@ -16,7 +16,7 @@ class ChatRequest(BaseModel):
     query: str
 
 @router.post("/chat")
-async def api_chat(req: ChatRequest):
+def api_chat(req: ChatRequest):
     t_start = time.time()
     import unicodedata
     query = unicodedata.normalize('NFC', req.query.strip())
@@ -222,13 +222,24 @@ async def api_chat(req: ChatRequest):
     # Sort final selected contexts globally by reranked distance
     contexts.sort(key=lambda x: x.get("distance", 0.0), reverse=True)
     
+    # 4.5. On-The-Fly Context Expansion (Parent-Child Chunking)
+    for c in contexts:
+        doc_id = c.get("document_id")
+        chunk_idx = c.get("chunk_index")
+        c["child_content"] = c["content"]  # preserve original child content
+        if doc_id is not None and chunk_idx is not None:
+            parent_text = fetch_and_merge_context(doc_id, chunk_idx)
+            if parent_text:
+                c["content"] = parent_text
+    
     for i, c in enumerate(contexts):
         second_stage_candidates.append({
             "document_id": c.get("document_id"),
             "chunk_index": c.get("chunk_index"),
             "filename": c["filename"],
             "servant_name": c["servant_name"],
-            "content": c["content"],
+            "content": c["content"],  # Expanded parent content
+            "child_content": c.get("child_content", c["content"]),  # Original child content
             "first_stage_score": next((f["score"] for f in first_stage_candidates if f["filename"] == c["filename"] and f["chunk_index"] == c["chunk_index"]), c["distance"]),
             "first_stage_rank": next((f["rank"] for f in first_stage_candidates if f["filename"] == c["filename"] and f["chunk_index"] == c["chunk_index"]), i + 1),
             "rerank_logit": c.get("rerank_logit"),
@@ -273,7 +284,7 @@ async def api_chat(req: ChatRequest):
                     "num_ctx": 8192
                 }
             },
-            timeout=120.0
+            timeout=300.0
         )
         r.raise_for_status()
         answer = r.json()["response"].strip()

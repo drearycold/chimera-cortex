@@ -117,7 +117,7 @@ def call_judge(
             "think": False,
             "options": {
                 "temperature": 0.0,
-                "num_ctx": 8192
+                "num_ctx": 16384
             },
         },
         timeout=timeout,
