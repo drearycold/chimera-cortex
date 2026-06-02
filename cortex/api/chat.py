@@ -8,7 +8,7 @@ from cortex.core.config import (
     OLLAMA_EMBED_MODEL, OLLAMA_GEN_MODEL
 )
 from cortex.core.database import get_mysql_connection, get_redis_client
-from cortex.core.rag import rerank_documents, get_embedding, decompose_query, fetch_and_merge_context
+from cortex.core.rag import rerank_documents, get_embedding, decompose_query, fetch_and_merge_chunk_range
 
 router = APIRouter(prefix="/api", tags=["Chat"])
 
@@ -223,14 +223,45 @@ def api_chat(req: ChatRequest):
     contexts.sort(key=lambda x: x.get("distance", 0.0), reverse=True)
     
     # 4.5. On-The-Fly Context Expansion (Parent-Child Chunking)
+    doc_to_chunks = {}
+    for c in contexts:
+        doc_id = c.get("document_id")
+        if doc_id is not None:
+            if doc_id not in doc_to_chunks:
+                doc_to_chunks[doc_id] = []
+            doc_to_chunks[doc_id].append(c.get("chunk_index"))
+            
+    doc_ranges = {}
+    for doc_id, chunk_indices in doc_to_chunks.items():
+        ranges = sorted([[idx - 1, idx + 1] for idx in chunk_indices if idx is not None])
+        merged_ranges = []
+        for r in ranges:
+            if not merged_ranges:
+                merged_ranges.append(r)
+            else:
+                last_r = merged_ranges[-1]
+                if r[0] <= last_r[1]:
+                    last_r[1] = max(last_r[1], r[1])
+                else:
+                    merged_ranges.append(r)
+        doc_ranges[doc_id] = merged_ranges
+        
+    doc_range_texts = {}
+    for doc_id, merged_ranges in doc_ranges.items():
+        doc_range_texts[doc_id] = []
+        for start, end in merged_ranges:
+            text = fetch_and_merge_chunk_range(doc_id, start, end)
+            doc_range_texts[doc_id].append((start, end, text))
+            
     for c in contexts:
         doc_id = c.get("document_id")
         chunk_idx = c.get("chunk_index")
         c["child_content"] = c["content"]  # preserve original child content
         if doc_id is not None and chunk_idx is not None:
-            parent_text = fetch_and_merge_context(doc_id, chunk_idx)
-            if parent_text:
-                c["content"] = parent_text
+            for start, end, text in doc_range_texts.get(doc_id, []):
+                if start <= chunk_idx <= end and text:
+                    c["content"] = text
+                    break
     
     for i, c in enumerate(contexts):
         second_stage_candidates.append({
@@ -253,7 +284,13 @@ def api_chat(req: ChatRequest):
     # 5. Generate RAG Response via Ollama (qwen3:8b)
     t_gen_start = time.time()
     if contexts:
-        context_str = "\n\n".join([f"--- SOURCE: {c['filename']} ---\n{c['content']}" for c in contexts])
+        unique_contents = []
+        seen_contents = set()
+        for c in contexts:
+            if c['content'] not in seen_contents:
+                seen_contents.add(c['content'])
+                unique_contents.append(f"--- SOURCE: {c['filename']} ---\n{c['content']}")
+        context_str = "\n\n".join(unique_contents)
         system_prompt = (
             "You are Chimera Cortex, a strict document AI assistant. "
             "You must answer the user query based ONLY on the provided document context below. "

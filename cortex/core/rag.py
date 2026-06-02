@@ -277,15 +277,13 @@ def decompose_query(query: str) -> list[str]:
         
     return [query]
 
-def fetch_and_merge_context(doc_id: int, chunk_index: int) -> str:
+def fetch_and_merge_chunk_range(doc_id: int, start_idx: int, end_idx: int) -> str:
     """
-    Fetch the chunk itself and its immediately adjacent neighbors (index - 1, index + 1)
-    from Infinity DB, then fuse them cleanly by identifying and resolving overlaps.
+    Fetch a contiguous range of chunks from Infinity DB and fuse them cleanly by identifying and resolving overlaps.
     """
     from .config import INFINITY_API_URL
     
-    # Retrieve chunk_index - 1, chunk_index, chunk_index + 1
-    filter_expr = f"document_id = {doc_id} AND chunk_index >= {chunk_index - 1} AND chunk_index <= {chunk_index + 1}"
+    filter_expr = f"document_id = {doc_id} AND chunk_index >= {start_idx} AND chunk_index <= {end_idx}"
     search_payload = {
         "output": ["chunk_index", "content"],
         "filter": filter_expr
@@ -350,6 +348,6 @@ def fetch_and_merge_context(doc_id: int, chunk_index: int) -> str:
         return merged
         
     except Exception as e:
-        print(f"[Warning] Failed to fetch or merge adjacent chunks for doc_id={doc_id}, chunk={chunk_index}: {e}")
+        print(f"[Warning] Failed to fetch or merge chunk range for doc_id={doc_id}, range={start_idx}-{end_idx}: {e}")
         return ""
 
