@@ -77,9 +77,14 @@ class DirectoryConnector(BaseConnector):
             def on_any_event(self, event):
                 if event.is_directory:
                     return
-                path = Path(event.src_path)
-                if connector._name_matches(path):
-                    callback(event.event_type, str(path))
+                paths = [Path(event.src_path)]
+                destination = getattr(event, "dest_path", None)
+                if destination:
+                    paths.append(Path(destination))
+                for path in paths:
+                    if connector._name_matches(path):
+                        callback(event.event_type, str(path))
+                        break
 
         observer = Observer()
         observer.schedule(Handler(), str(self.path), recursive=False)

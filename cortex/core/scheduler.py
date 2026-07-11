@@ -1,3 +1,9 @@
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from .connectors import DirectoryConnector
+
+
 def cron_trigger(expression: str):
     from apscheduler.triggers.cron import CronTrigger  # type: ignore[import-untyped]
 
@@ -7,6 +13,7 @@ def cron_trigger(expression: str):
 class SourceScheduler:
     def __init__(self):
         self.scheduler = None
+        self.watchers: dict[int, Any] = {}
 
     @property
     def running(self) -> bool:
@@ -24,6 +31,7 @@ class SourceScheduler:
         self.refresh()
 
     def shutdown(self):
+        self._stop_watchers()
         if self.running:
             self.scheduler.shutdown(wait=False)
         self.scheduler = None
@@ -31,10 +39,10 @@ class SourceScheduler:
     def refresh(self):
         if not self.running:
             return
-        from .database import list_scheduled_sources
+        from .database import list_scheduled_sources, list_watch_sources
 
         for job in self.scheduler.get_jobs():
-            if job.id.startswith("source-sync-"):
+            if job.id.startswith(("source-sync-", "source-watch-sync-")):
                 self.scheduler.remove_job(job.id)
         for source in list_scheduled_sources():
             trigger = cron_trigger(source["sync_cron"])
@@ -49,6 +57,79 @@ class SourceScheduler:
                 max_instances=1,
                 misfire_grace_time=300,
             )
+        self._stop_watchers()
+        for source in list_watch_sources():
+            try:
+                connector = DirectoryConnector(
+                    source["kb_id"],
+                    source["id"],
+                    source["config"]["path"],
+                    source["config"].get("glob_patterns", ["*.md"]),
+                )
+                observer = connector.watch(
+                    lambda event_type, path, source=source: self._schedule_watch_sync(
+                        source["kb_slug"],
+                        source["id"],
+                        event_type,
+                        path,
+                    )
+                )
+                self.watchers[source["id"]] = observer
+            except Exception as exc:
+                print(
+                    f"[SCHEDULER] Failed to watch source {source['id']}: {exc}"
+                )
+
+    def _stop_watchers(self):
+        for observer in self.watchers.values():
+            try:
+                observer.stop()
+                observer.join(timeout=2.0)
+            except Exception as exc:
+                print(f"[SCHEDULER] Failed to stop source watcher: {exc}")
+        self.watchers.clear()
+
+    def _schedule_watch_sync(
+        self,
+        kb_slug: str,
+        source_id: int,
+        event_type: str,
+        path: str,
+    ):
+        if not self.running:
+            return
+        print(
+            f"[SCHEDULER] Directory {event_type} for source {source_id}: {path}"
+        )
+        self.scheduler.add_job(
+            self._run_watched_source_sync,
+            trigger="date",
+            run_date=datetime.now(timezone.utc) + timedelta(seconds=1),
+            args=[kb_slug, source_id],
+            id=f"source-watch-sync-{source_id}",
+            name=f"Watch sync {kb_slug} / {source_id}",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+        )
+
+    def _run_watched_source_sync(self, kb_slug: str, source_id: int):
+        from .ingest import manager
+
+        if manager.get_status()["status"] == "running":
+            self.scheduler.add_job(
+                self._run_watched_source_sync,
+                trigger="date",
+                run_date=datetime.now(timezone.utc) + timedelta(seconds=2),
+                args=[kb_slug, source_id],
+                id=f"source-watch-sync-{source_id}",
+                name=f"Deferred watch sync {kb_slug} / {source_id}",
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+            )
+            return
+        self._run_source_sync(kb_slug, source_id)
 
     def job_status(self, source_id: int) -> dict:
         job = (
@@ -60,6 +141,7 @@ class SourceScheduler:
         return {
             "scheduler_running": self.running,
             "scheduled": job is not None,
+            "watching": source_id in self.watchers,
             "next_run_at": next_run.isoformat() if next_run is not None else None,
         }
 

@@ -16,6 +16,18 @@ def _validate_vector_table(table_name: str):
         raise ValueError(f"Invalid Infinity table name: {table_name}")
 
 
+def require_infinity_success(response: httpx.Response, operation: str) -> dict:
+    """Require both HTTP and Infinity application-level success."""
+    response.raise_for_status()
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise RuntimeError(f"Infinity {operation} returned invalid JSON") from exc
+    if body.get("error_code", 0) != 0:
+        raise RuntimeError(body.get("error_msg", f"Infinity {operation} failed"))
+    return body
+
+
 def ensure_vector_table(knowledge_base: dict, force_rebuild: bool = False):
     table_name = knowledge_base["vector_table"]
     _validate_vector_table(table_name)
@@ -35,6 +47,8 @@ def ensure_vector_table(knowledge_base: dict, force_rebuild: bool = False):
         )
         if response.status_code >= 400 and response.status_code != 404:
             response.raise_for_status()
+        if response.status_code < 400:
+            require_infinity_success(response, "table deletion")
 
     response = httpx.get(table_url, headers=headers, timeout=5.0)
     table_exists = (
@@ -167,6 +181,8 @@ def delete_knowledge_base_storage(knowledge_base: dict):
     )
     if response.status_code >= 400 and response.status_code != 404:
         response.raise_for_status()
+    if response.status_code < 400:
+        require_infinity_success(response, "table deletion")
 
     minio_client = get_minio_client()
     objects = minio_client.list_objects(
@@ -204,7 +220,7 @@ def delete_source_storage(knowledge_base: dict, source_id: int):
             headers=headers,
             timeout=10.0,
         )
-        response.raise_for_status()
+        require_infinity_success(response, "source document deletion")
         if minio_key:
             minio_client.remove_object(knowledge_base["minio_bucket"], minio_key)
     clear_knowledge_base_cache(knowledge_base["slug"])

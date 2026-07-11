@@ -17,6 +17,7 @@ from .kb_storage import (
     ensure_external_vector_columns,
     ensure_minio_bucket,
     ensure_vector_table,
+    require_infinity_success,
 )
 from .rag import chunk_markdown, get_embeddings_batch
 
@@ -68,11 +69,48 @@ def _canonical_document_bytes(document: dict[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
+def _find_external_document(kb_id: int, external_id: str) -> dict[str, Any] | None:
+    conn = get_mysql_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT d.id, d.content_hash, d.chunk_count, d.source_id
+            FROM documents d JOIN sources s ON s.id = d.source_id
+            WHERE s.kb_id = %s AND d.external_id = %s
+            """,
+            (kb_id, external_id),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row[0],
+            "content_hash": row[1],
+            "chunk_count": int(row[2] or 0),
+            "source_id": row[3],
+        }
+    finally:
+        cursor.close()
+        conn.close()
+
+
 def upsert_external_document(
     knowledge_base: dict,
     external_id: str,
     document: dict[str, Any],
 ) -> dict[str, Any]:
+    raw_bytes = _canonical_document_bytes(document)
+    content_hash = hashlib.sha256(raw_bytes).hexdigest()
+    existing = _find_external_document(knowledge_base["id"], external_id)
+    if existing and existing["content_hash"] == content_hash:
+        return {
+            "external_id": external_id,
+            "document_id": existing["id"],
+            "chunk_count": existing["chunk_count"],
+            "status": "unchanged",
+        }
+
     source_key = document["source_key"]
     source = get_or_create_external_source(knowledge_base["id"], source_key)
     ensure_minio_bucket(knowledge_base)
@@ -96,33 +134,14 @@ def upsert_external_document(
     if len(vectors) != len(chunks) or any(vector is None for vector in vectors):
         raise RuntimeError("Embedding generation failed for one or more external chunks.")
 
-    raw_bytes = _canonical_document_bytes(document)
-    content_hash = hashlib.sha256(raw_bytes).hexdigest()
     filename = f"external-{_opaque_digest(external_id)}.json"
     minio_key = f"{knowledge_base['slug']}/external/{filename}"
     conn = get_mysql_connection()
     cursor = conn.cursor()
     document_id = None
     try:
-        cursor.execute(
-            """
-            SELECT d.id, d.content_hash, d.source_id
-            FROM documents d JOIN sources s ON s.id = d.source_id
-            WHERE s.kb_id = %s AND d.external_id = %s
-            """,
-            (knowledge_base["id"], external_id),
-        )
-        existing = cursor.fetchone()
-        if existing and existing[1] == content_hash:
-            return {
-                "external_id": external_id,
-                "document_id": existing[0],
-                "chunk_count": len(chunks),
-                "status": "unchanged",
-            }
-
         if existing:
-            document_id = existing[0]
+            document_id = existing["id"]
             cursor.execute(
                 """
                 UPDATE documents
@@ -178,7 +197,7 @@ def upsert_external_document(
             headers=headers,
             timeout=10.0,
         )
-        response.raise_for_status()
+        require_infinity_success(response, "external document replacement")
         rows = [
             {
                 "document_id": document_id,
@@ -262,7 +281,7 @@ def delete_external_document(knowledge_base: dict, external_id: str) -> bool:
             headers={"Content-Type": "application/json"},
             timeout=10.0,
         )
-        response.raise_for_status()
+        require_infinity_success(response, "external document deletion")
         if minio_key:
             get_minio_client().remove_object(knowledge_base["minio_bucket"], minio_key)
         cursor.execute("DELETE FROM documents WHERE id = %s", (document_id,))

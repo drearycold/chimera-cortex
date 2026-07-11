@@ -260,14 +260,18 @@ class CalibreConnector(BaseConnector):
 
     def scan(self) -> list[RawDocument]:
         documents = []
+        errors = []
         for book in self._metadata(self._book_ids()):
             try:
                 document = self._document(book)
             except Exception as exc:
                 print(f"[CALIBRE] Failed to import book {book.get('id')}: {exc}")
+                errors.append(f"{book.get('id')}: {exc}")
                 continue
             if document is not None:
                 documents.append(document)
+        if errors:
+            raise RuntimeError("Calibre sync could not import books: " + "; ".join(errors))
         return documents
 
     def detect_changes(self, since: float) -> list[RawDocument]:

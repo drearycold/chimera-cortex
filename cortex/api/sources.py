@@ -55,6 +55,16 @@ def _validate_source_config(
     sync_mode: str,
     sync_cron: str | None,
 ):
+    if sync_mode == "watch" and source_type != "directory":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Watch mode is supported only for directory sources.",
+        )
+    if sync_mode == "push" and source_type != "external":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Push mode is supported only for external sources.",
+        )
     if sync_mode == "scheduled":
         if not sync_cron or len(sync_cron.split()) != 5:
             raise HTTPException(

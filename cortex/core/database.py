@@ -854,6 +854,33 @@ def list_scheduled_sources() -> list[dict]:
         conn.close()
 
 
+def list_watch_sources() -> list[dict]:
+    conn = get_mysql_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            """
+            SELECT s.*, kb.slug AS kb_slug
+            FROM sources s
+            JOIN knowledge_bases kb ON kb.id = s.kb_id
+            WHERE s.enabled = TRUE AND kb.enabled = TRUE
+              AND s.type = 'directory' AND s.sync_mode = 'watch'
+            ORDER BY s.id
+            """
+        )
+        sources = []
+        for row in cursor.fetchall():
+            kb_slug = row.pop("kb_slug")
+            source = _decode_source(row)
+            if source is not None:
+                source["kb_slug"] = kb_slug
+                sources.append(source)
+        return sources
+    finally:
+        cursor.close()
+        conn.close()
+
+
 def record_ingestion_log(
     kb_slug: str,
     source_id: int | None,

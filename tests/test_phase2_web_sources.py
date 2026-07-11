@@ -127,8 +127,13 @@ class PhaseTwoWebSourceTests(unittest.TestCase):
         )
         self.assertTrue(thread_mock.call_args.kwargs["daemon"])
 
+    @patch("cortex.core.database.list_watch_sources", return_value=[])
     @patch("cortex.core.database.list_scheduled_sources")
-    def test_scheduler_registers_enabled_cron_sources(self, list_sources_mock):
+    def test_scheduler_registers_enabled_cron_sources(
+        self,
+        list_sources_mock,
+        _list_watch_sources_mock,
+    ):
         list_sources_mock.return_value = [
             {
                 "id": 9,

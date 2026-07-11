@@ -38,6 +38,7 @@ from .kb_storage import (
     ensure_external_vector_columns,
     ensure_minio_bucket,
     ensure_vector_table,
+    require_infinity_success,
 )
 from .rag import chunk_markdown, get_embeddings_batch, parse_document_title
 
@@ -202,10 +203,7 @@ class IngestManager:
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         try:
             ensure_minio_bucket(knowledge_base)
-            vector_table_created = ensure_vector_table(
-                knowledge_base,
-                force_rebuild=force_rebuild,
-            )
+            vector_table_created = ensure_vector_table(knowledge_base)
             if not vector_table_created:
                 ensure_external_vector_columns(knowledge_base)
             minio_client = get_minio_client()
@@ -334,7 +332,7 @@ class IngestManager:
                     headers=headers,
                     timeout=10.0,
                 )
-                response.raise_for_status()
+                require_infinity_success(response, "deleted-source chunk deletion")
                 minio_client.remove_object(bucket_name, minio_key)
                 cursor.execute("DELETE FROM documents WHERE id = %s", (document_id,))
                 mysql_conn.commit()
@@ -498,9 +496,12 @@ class IngestManager:
                             headers=headers,
                             timeout=10.0
                         )
-                        resp.raise_for_status()
+                        require_infinity_success(resp, "document chunk deletion")
                     except Exception as clean_err:
-                        print(f"      [Warning] Failed to delete existing chunks for document ID {doc_id}: {clean_err}")
+                        raise RuntimeError(
+                            f"Failed to delete existing chunks for document ID "
+                            f"{doc_id}: {clean_err}"
+                        ) from clean_err
                 else:
                     doc_id = None
                 

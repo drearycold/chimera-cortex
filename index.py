@@ -172,7 +172,7 @@ sub-commands (positional):
     parser.add_argument(
         "--force-rebuild",
         action="store_true",
-        help="Force dropping and rebuilding the index (default: False)",
+        help="Re-embed every document in the selected source (default: False)",
     )
     args = parser.parse_args()
 

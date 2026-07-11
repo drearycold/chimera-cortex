@@ -9,6 +9,7 @@ from cortex.core.database import (
     get_mysql_connection,
     get_redis_client,
 )
+from cortex.core.kb_storage import require_infinity_success
 
 router = APIRouter(prefix="/api", tags=["Documents"])
 
@@ -117,9 +118,7 @@ def api_delete_kb_document(slug: str, document_id: int):
             headers=headers,
             timeout=10.0,
         )
-        response.raise_for_status()
-        if response.json().get("error_code", 0) != 0:
-            raise RuntimeError(response.json().get("error_msg", "Infinity delete failed"))
+        require_infinity_success(response, "document deletion")
         get_minio_client().remove_object(
             knowledge_base["minio_bucket"],
             document["minio_key"],
