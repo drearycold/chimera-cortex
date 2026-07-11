@@ -11,6 +11,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const cacheStatus = document.getElementById("cache-status");
     const responseTime = document.getElementById("response-time");
     const retrievedContexts = document.getElementById("retrieved-contexts");
+    const chatKbSelect = document.getElementById("chat-kb-select");
     
     // Modal
     const documentModal = document.getElementById("document-modal");
@@ -22,8 +23,10 @@ document.addEventListener("DOMContentLoaded", () => {
     // DOM Elements - Navigation Tabs
     // ==========================================================================
     const tabChat = document.getElementById("tab-chat");
+    const tabManage = document.getElementById("tab-manage");
     const tabBenchmark = document.getElementById("tab-benchmark");
     const chatLayout = document.getElementById("chat-layout");
+    const manageLayout = document.getElementById("manage-layout");
     const benchmarkLayout = document.getElementById("benchmark-layout");
 
     // ==========================================================================
@@ -70,7 +73,14 @@ document.addEventListener("DOMContentLoaded", () => {
     // Global State
     // ==========================================================================
     let documentsData = [];
-    let activeTab = "chat"; // "chat" or "benchmark"
+    let activeTab = "chat";
+    let knowledgeBases = [];
+    let selectedKbSlug = "fgo-lore";
+    let managedKb = null;
+    let managedSources = [];
+    let managedDocuments = [];
+    let managedLogs = [];
+    let managementMode = null;
     let historicalRuns = [];
     let selectedRunId = null;
     let activeRunDetail = null;
@@ -88,7 +98,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // Initialization
     // ==========================================================================
     fetchSystemStatus();
-    fetchDocuments();
+    fetchKnowledgeBases();
     
     // Periodic status check (every 15 seconds)
     setInterval(fetchSystemStatus, 15000);
@@ -100,26 +110,22 @@ document.addEventListener("DOMContentLoaded", () => {
     // Tab Navigation Event Handlers
     // ==========================================================================
     tabChat.addEventListener("click", () => switchTab("chat"));
+    tabManage.addEventListener("click", () => switchTab("manage"));
     tabBenchmark.addEventListener("click", () => switchTab("benchmark"));
 
     function switchTab(tabName) {
         if (activeTab === tabName) return;
         activeTab = tabName;
 
-        if (tabName === "chat") {
-            tabChat.classList.add("active");
-            tabBenchmark.classList.remove("active");
-            chatLayout.style.display = "flex";
-            benchmarkLayout.style.display = "none";
-        } else {
-            tabBenchmark.classList.add("active");
-            tabChat.classList.remove("active");
-            benchmarkLayout.style.display = "flex";
-            chatLayout.style.display = "none";
-            
-            // Reload run history when opening tab
-            fetchRuns();
-        }
+        tabChat.classList.toggle("active", tabName === "chat");
+        tabManage.classList.toggle("active", tabName === "manage");
+        tabBenchmark.classList.toggle("active", tabName === "benchmark");
+        chatLayout.style.display = tabName === "chat" ? "flex" : "none";
+        manageLayout.style.display = tabName === "manage" ? "grid" : "none";
+        benchmarkLayout.style.display = tabName === "benchmark" ? "flex" : "none";
+
+        if (tabName === "manage") refreshManagement();
+        if (tabName === "benchmark") fetchRuns();
     }
 
     // ==========================================================================
@@ -132,8 +138,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         
         if (e.target.classList.contains("meta-source")) {
-            const filename = e.target.dataset.filename;
-            openSourceDocument(filename);
+            openSourceDocument(e.target.dataset.filename);
         }
     });
 
@@ -170,7 +175,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const startTime = performance.now();
         
         try {
-            const res = await fetch("/api/chat", {
+            const res = await fetch(`/api/kb/${selectedKbSlug}/chat`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json"
@@ -238,7 +243,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // Fetch documents in MySQL corpus
     async function fetchDocuments() {
         try {
-            const res = await fetch("/api/documents");
+            const res = await fetch(`/api/kb/${selectedKbSlug}/documents`);
             if (!res.ok) throw new Error("documents list not ok");
             const data = await res.json();
             documentsData = data.documents;
@@ -386,7 +391,9 @@ document.addEventListener("DOMContentLoaded", () => {
         documentModal.style.display = "flex";
         
         try {
-            const res = await fetch(`/api/document/${filename}`);
+            const document = documentsData.find(item => item.filename === filename);
+            if (!document) throw new Error("Document is not present in the selected knowledge base");
+            const res = await fetch(`/api/kb/${selectedKbSlug}/documents/${document.id}/content`);
             if (!res.ok) throw new Error(`Status ${res.status}`);
             const data = await res.json();
             modalContent.textContent = data.content;
@@ -395,6 +402,369 @@ document.addEventListener("DOMContentLoaded", () => {
             console.error("MinIO fetch error:", err);
         }
     }
+
+    // ==========================================================================
+    // Knowledge Base Management
+    // ==========================================================================
+    const kbList = document.getElementById("kb-list");
+    const kbSearch = document.getElementById("kb-search");
+    const managementModal = document.getElementById("management-modal");
+    const managementForm = document.getElementById("management-form");
+    const managementFormBody = document.getElementById("management-form-body");
+
+    async function apiRequest(url, options = {}) {
+        const response = await fetch(url, options);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.detail || `Request failed (${response.status})`);
+        return data;
+    }
+
+    function refreshIcons() {
+        if (window.lucide) window.lucide.createIcons();
+    }
+
+    async function fetchKnowledgeBases(preferredSlug = selectedKbSlug) {
+        try {
+            const data = await apiRequest("/api/kb");
+            knowledgeBases = data.knowledge_bases || [];
+            if (!knowledgeBases.some(kb => kb.slug === preferredSlug)) {
+                preferredSlug = knowledgeBases[0]?.slug || "";
+            }
+            selectedKbSlug = preferredSlug;
+            renderKnowledgeBaseSelectors();
+            await fetchDocuments();
+        } catch (error) {
+            kbList.innerHTML = `<p class="loading-item">${escapeHtml(error.message)}</p>`;
+        }
+    }
+
+    function renderKnowledgeBaseSelectors() {
+        const options = knowledgeBases.map(kb =>
+            `<option value="${escapeHtml(kb.slug)}">${escapeHtml(kb.name)}</option>`
+        ).join("");
+        chatKbSelect.innerHTML = options;
+        chatKbSelect.value = selectedKbSlug;
+        document.getElementById("compare-left").innerHTML = options;
+        document.getElementById("compare-right").innerHTML = options;
+        document.getElementById("compare-left").value = selectedKbSlug;
+        const comparison = knowledgeBases.find(kb => kb.slug !== selectedKbSlug);
+        document.getElementById("compare-right").value = comparison?.slug || selectedKbSlug;
+        renderKnowledgeBaseList();
+        renderOverview();
+        renderComparison();
+    }
+
+    function renderKnowledgeBaseList() {
+        const query = kbSearch.value.trim().toLowerCase();
+        const filtered = knowledgeBases.filter(kb =>
+            `${kb.name} ${kb.slug}`.toLowerCase().includes(query)
+        );
+        kbList.innerHTML = filtered.length ? filtered.map(kb => `
+            <button class="kb-list-item ${kb.slug === managedKb?.slug ? "active" : ""}" data-kb-slug="${escapeHtml(kb.slug)}">
+                <strong>${escapeHtml(kb.name)}</strong><small>${kb.stats?.document_count || 0} docs</small>
+                <span>${escapeHtml(kb.slug)}</span><small>${kb.enabled ? "Active" : "Disabled"}</small>
+            </button>
+        `).join("") : `<p class="loading-item">No matching knowledge bases.</p>`;
+    }
+
+    function renderOverview() {
+        const totals = knowledgeBases.reduce((sum, kb) => ({
+            sources: sum.sources + (kb.stats?.source_count || 0),
+            documents: sum.documents + (kb.stats?.document_count || 0),
+            chunks: sum.chunks + (kb.stats?.chunk_count || 0),
+        }), { sources: 0, documents: 0, chunks: 0 });
+        document.getElementById("overview-kbs").textContent = knowledgeBases.length;
+        document.getElementById("overview-sources").textContent = totals.sources;
+        document.getElementById("overview-documents").textContent = totals.documents;
+        document.getElementById("overview-chunks").textContent = totals.chunks.toLocaleString();
+    }
+
+    function renderComparison() {
+        const left = knowledgeBases.find(kb => kb.slug === document.getElementById("compare-left").value);
+        const right = knowledgeBases.find(kb => kb.slug === document.getElementById("compare-right").value);
+        const summary = document.getElementById("compare-summary");
+        if (!left || !right) {
+            summary.textContent = "Select two knowledge bases";
+            return;
+        }
+        summary.textContent = `${left.stats.document_count} vs ${right.stats.document_count} docs; ${left.stats.chunk_count.toLocaleString()} vs ${right.stats.chunk_count.toLocaleString()} chunks`;
+    }
+
+    async function refreshManagement() {
+        await fetchKnowledgeBases(managedKb?.slug || selectedKbSlug);
+        if (selectedKbSlug) await selectManagedKnowledgeBase(selectedKbSlug);
+    }
+
+    async function selectManagedKnowledgeBase(slug) {
+        try {
+            const [kb, sourcesData, documentsDataResult, logsData] = await Promise.all([
+                apiRequest(`/api/kb/${slug}`),
+                apiRequest(`/api/kb/${slug}/sources`),
+                apiRequest(`/api/kb/${slug}/documents`),
+                apiRequest(`/api/kb/${slug}/ingestion-logs`),
+            ]);
+            managedKb = kb;
+            selectedKbSlug = slug;
+            managedSources = sourcesData.sources || [];
+            managedDocuments = documentsDataResult.documents || [];
+            managedLogs = logsData.logs || [];
+            chatKbSelect.value = slug;
+            document.getElementById("manage-empty").style.display = "none";
+            document.getElementById("manage-detail").style.display = "block";
+            renderKnowledgeBaseList();
+            renderManagedKnowledgeBase();
+        } catch (error) {
+            alert(`Could not load knowledge base: ${error.message}`);
+        }
+    }
+
+    function renderManagedKnowledgeBase() {
+        document.getElementById("manage-kb-name").textContent = managedKb.name;
+        document.getElementById("manage-kb-description").textContent = managedKb.description || managedKb.slug;
+        const status = document.getElementById("manage-kb-status");
+        status.textContent = managedKb.enabled ? "ACTIVE" : "DISABLED";
+        status.classList.toggle("disabled", !managedKb.enabled);
+        document.getElementById("source-count-label").textContent = `${managedSources.length} configured`;
+        document.getElementById("document-count-label").textContent = `${managedDocuments.length} indexed`;
+        document.getElementById("ingest-config-preview").textContent = JSON.stringify(managedKb.ingest_config, null, 2);
+        document.getElementById("generation-config-preview").textContent = JSON.stringify(managedKb.generation_config, null, 2);
+        renderSourcesTable();
+        renderManagedDocuments();
+        renderActivity();
+        refreshIcons();
+    }
+
+    function emptyRow(columns, text) {
+        return `<tr><td colspan="${columns}" class="empty-cell">${escapeHtml(text)}</td></tr>`;
+    }
+
+    function renderSourcesTable() {
+        const body = document.getElementById("sources-table-body");
+        body.innerHTML = managedSources.length ? managedSources.map(source => `
+            <tr>
+                <td title="${escapeHtml(source.name)}">${escapeHtml(source.name)}</td>
+                <td><span class="type-badge">${escapeHtml(source.type)}</span></td>
+                <td>${escapeHtml(source.sync_mode)}</td>
+                <td>${formatDate(source.last_synced_at)}</td>
+                <td><span class="result-badge ${source.enabled ? "ok" : "error"}">${source.enabled ? "Enabled" : "Disabled"}</span></td>
+                <td class="table-actions">
+                    ${source.sync_mode !== "push" ? `<button class="mini-button" data-source-action="sync" data-source-id="${source.id}" title="Sync"><i data-lucide="refresh-cw"></i></button>` : ""}
+                    <button class="mini-button" data-source-action="edit" data-source-id="${source.id}" title="Edit"><i data-lucide="pencil"></i></button>
+                    <button class="mini-button danger" data-source-action="delete" data-source-id="${source.id}" title="Delete"><i data-lucide="trash-2"></i></button>
+                </td>
+            </tr>
+        `).join("") : emptyRow(6, "No sources configured.");
+    }
+
+    function renderManagedDocuments() {
+        const body = document.getElementById("documents-table-body");
+        body.innerHTML = managedDocuments.length ? managedDocuments.map(doc => `
+            <tr>
+                <td title="${escapeHtml(doc.title)}">${escapeHtml(doc.title)}</td>
+                <td>${escapeHtml(doc.source_name)}</td>
+                <td><span class="type-badge">${escapeHtml(doc.format || "-")}</span></td>
+                <td>${doc.chunk_count || 0}</td>
+                <td>${formatDate(doc.indexed_at)}</td>
+                <td class="table-actions">
+                    <button class="mini-button" data-document-action="view" data-document-id="${doc.id}" title="View"><i data-lucide="eye"></i></button>
+                    <button class="mini-button danger" data-document-action="delete" data-document-id="${doc.id}" title="Delete"><i data-lucide="trash-2"></i></button>
+                </td>
+            </tr>
+        `).join("") : emptyRow(6, "No documents indexed.");
+    }
+
+    function renderActivity() {
+        const body = document.getElementById("activity-table-body");
+        body.innerHTML = managedLogs.length ? managedLogs.map(log => `
+            <tr>
+                <td>${formatDate(log.created_at)}</td>
+                <td>${escapeHtml(log.source_name || "Deleted source")}</td>
+                <td>${escapeHtml(log.action)}</td>
+                <td>${log.docs_processed} / ${log.docs_skipped}</td>
+                <td>${Number(log.duration_seconds || 0).toFixed(1)}s</td>
+                <td><span class="result-badge ${log.docs_failed || log.error_detail ? "error" : "ok"}">${log.docs_failed || log.error_detail ? "Failed" : "Success"}</span></td>
+            </tr>
+        `).join("") : emptyRow(6, "No ingestion activity recorded.");
+    }
+
+    function formatDate(value) {
+        return value ? new Date(value).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : "Never";
+    }
+
+    function showManagementModal(mode, item = null) {
+        managementMode = { mode, item };
+        const isKb = mode === "create-kb" || mode === "edit-kb";
+        document.getElementById("management-modal-title").textContent = isKb ? `${item ? "Edit" : "Create"} knowledge base` : `${item ? "Edit" : "Add"} source`;
+        managementFormBody.innerHTML = isKb ? knowledgeBaseFields(item) : sourceFields(item);
+        managementModal.style.display = "flex";
+        bindSourceTypeTemplate();
+        refreshIcons();
+    }
+
+    function field(name, label, value = "", options = {}) {
+        const full = options.full ? " full" : "";
+        const required = options.required === false ? "" : " required";
+        if (options.type === "textarea") {
+            return `<div class="management-field${full}"><label for="field-${name}">${label}</label><textarea id="field-${name}" name="${name}"${required}>${escapeHtml(value)}</textarea></div>`;
+        }
+        if (options.choices) {
+            const choices = options.choices.map(choice => `<option value="${choice}" ${choice === value ? "selected" : ""}>${choice}</option>`).join("");
+            return `<div class="management-field${full}"><label for="field-${name}">${label}</label><select id="field-${name}" name="${name}"${required}>${choices}</select></div>`;
+        }
+        return `<div class="management-field${full}"><label for="field-${name}">${label}</label><input id="field-${name}" name="${name}" type="${options.type || "text"}" value="${escapeHtml(value)}"${required}${options.readonly ? " readonly" : ""}></div>`;
+    }
+
+    function knowledgeBaseFields(kb) {
+        return field("slug", "Slug", kb?.slug || "", { readonly: Boolean(kb) }) +
+            field("name", "Name", kb?.name || "") +
+            field("description", "Description", kb?.description || "", { full: true, required: false }) +
+            field("ingest_config", "Ingestion config (JSON)", JSON.stringify(kb?.ingest_config || defaultIngestConfig(), null, 2), { type: "textarea", full: true }) +
+            field("generation_config", "Generation config (JSON)", JSON.stringify(kb?.generation_config || defaultGenerationConfig(), null, 2), { type: "textarea", full: true });
+    }
+
+    function sourceFields(source) {
+        return field("name", "Name", source?.name || "") +
+            field("type", "Type", source?.type || "directory", { choices: source ? [source.type] : ["directory", "web", "calibre", "cloud_drive", "external"] }) +
+            field("sync_mode", "Sync mode", source?.sync_mode || "manual", { choices: ["manual", "watch", "scheduled", "push"] }) +
+            field("sync_cron", "Cron (scheduled only)", source?.sync_cron || "", { required: false }) +
+            field("config", "Source config (JSON)", JSON.stringify(source?.config || sourceConfigTemplate("directory"), null, 2), { type: "textarea", full: true }) +
+            `<p class="management-help">Credentials must be environment variable names. Secrets are never stored in source configuration.</p>`;
+    }
+
+    function bindSourceTypeTemplate() {
+        if (managementMode?.item || !managementMode?.mode.includes("source")) return;
+        const type = document.getElementById("field-type");
+        type?.addEventListener("change", () => {
+            document.getElementById("field-config").value = JSON.stringify(sourceConfigTemplate(type.value), null, 2);
+            document.getElementById("field-sync_mode").value = type.value === "external" ? "push" : "manual";
+        });
+    }
+
+    function sourceConfigTemplate(type) {
+        const templates = {
+            directory: { path: "documents" },
+            web: { url: "https://example.com/docs", max_depth: 1, max_pages: 25 },
+            calibre: { base_url: "http://192.168.11.65:8080", library_id: "Calibre_Library", preferred_formats: ["EPUB", "PDF"] },
+            cloud_drive: { provider: "google_drive", folder_id: "", service_account_env: "GOOGLE_SERVICE_ACCOUNT_JSON" },
+            external: { source_key: "dsreaderhelper" },
+        };
+        return templates[type];
+    }
+
+    function defaultIngestConfig() {
+        return { embedding: { model: "nomic-embed-text:latest", dimensions: 768, provider: "ollama" }, chunking: { strategy: "markdown_aware", max_chars: 600, overlap_chars: 120 }, search: { bm25_enabled: true, initial_topn: 20, rrf_k: 60, context_window: 2 } };
+    }
+
+    function defaultGenerationConfig() {
+        return { model: "qwen3:8b", provider: "ollama", temperature: 0, max_tokens: 256, top_k_contexts: 10, query_rewrite: { enabled: true, model: "qwen3:8b" }, reranker: { enabled: true } };
+    }
+
+    managementForm.addEventListener("submit", async event => {
+        event.preventDefault();
+        const values = Object.fromEntries(new FormData(managementForm));
+        try {
+            if (managementMode.mode.includes("kb")) {
+                const payload = { name: values.name, description: values.description || null, ingest_config: JSON.parse(values.ingest_config), generation_config: JSON.parse(values.generation_config) };
+                if (managementMode.mode === "create-kb") payload.slug = values.slug;
+                const url = managementMode.mode === "create-kb" ? "/api/kb" : `/api/kb/${managedKb.slug}`;
+                await apiRequest(url, { method: managementMode.mode === "create-kb" ? "POST" : "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+                selectedKbSlug = values.slug || managedKb.slug;
+            } else {
+                const payload = { name: values.name, config: JSON.parse(values.config), sync_mode: values.sync_mode, sync_cron: values.sync_cron || null };
+                if (managementMode.mode === "create-source") payload.type = values.type;
+                const sourceId = managementMode.item?.id;
+                const url = sourceId ? `/api/kb/${managedKb.slug}/sources/${sourceId}` : `/api/kb/${managedKb.slug}/sources`;
+                await apiRequest(url, { method: sourceId ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+            }
+            closeManagementModal();
+            await refreshManagement();
+        } catch (error) {
+            let errorNode = managementFormBody.querySelector(".management-error");
+            if (!errorNode) {
+                errorNode = document.createElement("p");
+                errorNode.className = "management-error";
+                managementFormBody.appendChild(errorNode);
+            }
+            errorNode.textContent = error.message;
+        }
+    });
+
+    function closeManagementModal() {
+        managementModal.style.display = "none";
+        managementMode = null;
+    }
+
+    chatKbSelect.addEventListener("change", async event => {
+        selectedKbSlug = event.target.value;
+        await fetchDocuments();
+    });
+    kbSearch.addEventListener("input", renderKnowledgeBaseList);
+    kbList.addEventListener("click", event => {
+        const item = event.target.closest("[data-kb-slug]");
+        if (item) selectManagedKnowledgeBase(item.dataset.kbSlug);
+    });
+    document.getElementById("compare-left").addEventListener("change", renderComparison);
+    document.getElementById("compare-right").addEventListener("change", renderComparison);
+    document.getElementById("btn-refresh-manage").addEventListener("click", refreshManagement);
+    document.getElementById("btn-create-kb").addEventListener("click", () => showManagementModal("create-kb"));
+    document.getElementById("btn-edit-kb").addEventListener("click", () => showManagementModal("edit-kb", managedKb));
+    document.getElementById("btn-add-source").addEventListener("click", () => showManagementModal("create-source"));
+    document.getElementById("close-management-modal").addEventListener("click", closeManagementModal);
+    document.getElementById("btn-cancel-management").addEventListener("click", closeManagementModal);
+    document.getElementById("workspace-tabs").addEventListener("click", event => {
+        const button = event.target.closest("[data-view]");
+        if (!button) return;
+        document.querySelectorAll("#workspace-tabs button").forEach(item => item.classList.toggle("active", item === button));
+        document.querySelectorAll(".workspace-view").forEach(view => view.classList.toggle("active", view.id === `manage-${button.dataset.view}-view`));
+    });
+
+    document.getElementById("sources-table-body").addEventListener("click", async event => {
+        const button = event.target.closest("[data-source-action]");
+        if (!button) return;
+        const source = managedSources.find(item => item.id === Number(button.dataset.sourceId));
+        if (button.dataset.sourceAction === "edit") return showManagementModal("edit-source", source);
+        if (button.dataset.sourceAction === "delete" && !confirm(`Delete source "${source.name}" and all indexed documents?`)) return;
+        try {
+            const url = `/api/kb/${managedKb.slug}/sources/${source.id}` + (button.dataset.sourceAction === "sync" ? "/sync" : "");
+            await apiRequest(url, { method: button.dataset.sourceAction === "sync" ? "POST" : "DELETE" });
+            if (button.dataset.sourceAction === "sync") alert("Source sync started.");
+            await refreshManagement();
+        } catch (error) { alert(error.message); }
+    });
+
+    document.getElementById("documents-table-body").addEventListener("click", async event => {
+        const button = event.target.closest("[data-document-action]");
+        if (!button) return;
+        const doc = managedDocuments.find(item => item.id === Number(button.dataset.documentId));
+        if (button.dataset.documentAction === "view") {
+            documentsData = managedDocuments;
+            return openSourceDocument(doc.filename);
+        }
+        if (!confirm(`Delete document "${doc.title}"?`)) return;
+        try {
+            await apiRequest(`/api/kb/${managedKb.slug}/documents/${doc.id}`, { method: "DELETE" });
+            await refreshManagement();
+        } catch (error) { alert(error.message); }
+    });
+
+    document.getElementById("btn-clear-cache").addEventListener("click", async () => {
+        try {
+            const result = await apiRequest(`/api/kb/${managedKb.slug}/cache/clear`, { method: "POST" });
+            alert(result.message);
+        } catch (error) { alert(error.message); }
+    });
+    document.getElementById("btn-delete-kb").addEventListener("click", async () => {
+        if (!confirm(`Delete knowledge base "${managedKb.name}" and all of its storage?`)) return;
+        try {
+            await apiRequest(`/api/kb/${managedKb.slug}`, { method: "DELETE" });
+            managedKb = null;
+            document.getElementById("manage-empty").style.display = "grid";
+            document.getElementById("manage-detail").style.display = "none";
+            await refreshManagement();
+        } catch (error) { alert(error.message); }
+    });
+
+    refreshIcons();
 
     // ==========================================================================
     // RAG Audit Dashboard - REST Helpers
@@ -906,8 +1276,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function escapeHtml(text) {
-        if (!text) return "";
-        return text
+        if (text === null || text === undefined) return "";
+        return String(text)
             .replace(/&/g, "&amp;")
             .replace(/</g, "&lt;")
             .replace(/>/g, "&gt;")
@@ -953,7 +1323,7 @@ document.addEventListener("DOMContentLoaded", () => {
             console.log("Benchmark started, run_id:", data.run_id);
             
             // Switch progress UI
-            liveProgressContainer.style.style = "block";
+            liveProgressContainer.style.display = "block";
             liveProgressStatus.textContent = "Evaluation run initiated...";
             liveProgressFill.style.width = "0%";
             

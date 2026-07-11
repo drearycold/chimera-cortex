@@ -1,0 +1,19 @@
+{
+  "title": "Spoiler Boundary Fixture",
+  "source_key": "opaque-library-source",
+  "metadata": {"fixture": true},
+  "segments": [
+    {
+      "ordinal": 120,
+      "locator": {"type": "epub_cfi", "value": "epubcfi(/6/2)"},
+      "heading": "Known Events",
+      "text": "The known event happens before the reader position."
+    },
+    {
+      "ordinal": 127,
+      "locator": {"type": "epub_cfi", "value": "epubcfi(/6/4)"},
+      "heading": "Future Events",
+      "text": "The future event must not be retrieved with max ordinal 126."
+    }
+  ]
+}

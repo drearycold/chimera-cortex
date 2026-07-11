@@ -1,0 +1,15 @@
+{
+  "42": {
+    "title": "Grounded Systems",
+    "authors": ["Ada Example"],
+    "tags": ["retrieval", "testing"],
+    "series": "Reader Architecture",
+    "series_index": 2.0,
+    "publisher": "Cortex Press",
+    "uuid": "fixture-uuid-42",
+    "identifiers": {"isbn": "9780000000042"},
+    "comments": "<p>A fixture served over HTTP.</p>",
+    "last_modified": "2026-07-11T08:00:00+00:00",
+    "formats": ["TXT"]
+  }
+}

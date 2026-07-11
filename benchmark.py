@@ -50,6 +50,7 @@ def cmd_run(args):
     print("=" * 60)
     print(f"  API URL     : {args.api_url}")
     print(f"  Dataset     : {args.dataset}")
+    print(f"  Knowledge DB: {args.kb}")
     print(f"  Judge Model : {args.judge_model}")
     print(f"  Reuse Cache : {args.reuse_cache}")
     if args.comment:
@@ -62,6 +63,7 @@ def cmd_run(args):
         "judge_model": args.judge_model,
         "reuse_cache": args.reuse_cache,
         "comment": args.comment,
+        "kb_slug": args.kb,
     })
 
     if resp.status_code == 400:
@@ -133,8 +135,8 @@ def cmd_run(args):
 
     except KeyboardInterrupt:
         print("\n\n[INFO] Detached from progress polling. The benchmark continues on the server.")
-        print(f"[INFO] Re-attach:  python benchmark.py status")
-        print(f"[INFO] Stop it:    python benchmark.py stop")
+        print("[INFO] Re-attach:  python benchmark.py status")
+        print("[INFO] Stop it:    python benchmark.py stop")
         print(f"[INFO] Results:    {args.api_url}/api/benchmarks/{run_id}")
 
 
@@ -225,6 +227,11 @@ sub-commands (positional):
         "--dataset",
         default="benchmark_dataset.json",
         help="Path to benchmark dataset JSON (default: benchmark_dataset.json)",
+    )
+    parser.add_argument(
+        "--kb",
+        default="fgo-lore",
+        help="Knowledge base slug to evaluate (default: fgo-lore)",
     )
     parser.add_argument(
         "--judge-model",

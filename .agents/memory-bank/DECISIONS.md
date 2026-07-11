@@ -67,7 +67,7 @@
 
 ## D-20260604-0520-calibre-sqlite-direct
 
-- Status: ACCEPTED
+- Status: SUPERSEDED
 - Date: 2026-06-04T05:20:00Z
 - Decision owner: Researcher (recommendation accepted by user)
 - Context: Evaluated Calibre integration approaches (CLI, REST wrapper, direct SQLite, Python API).
@@ -75,6 +75,45 @@
 - Rationale: No dependency on Calibre being installed/running. Direct access to full metadata schema. Read-only mode avoids concurrent access issues.
 - Consequences: Must not access `metadata.db` while Calibre GUI is writing. Calibre Python API not needed.
 - Evidence: Research in `knowledge_base_ingestion_architecture.md` Section 3.4
+- Supersedes: N/A
+- Superseded by: D-20260711-dsreaderhelper-cortex-contract
+
+## D-20260711-dsreaderhelper-cortex-contract
+
+- Status: SUPERSEDED
+- Date: 2026-07-11
+- Decision owner: User
+- Context: The initial Phase 3 implementation connected Cortex directly to Calibre `metadata.db`. The user clarified that DSReaderHelper is the required intermediary and supplied the advanced reader QA retrieval contract.
+- Decision: DSReaderHelper owns Calibre access, ebook parsing, reader semantics, scope resolution, and opaque ID mapping. Cortex exposes generic external-document PUT/DELETE/batch APIs and accepts opaque document/source filters with per-document ordinal caps. Cortex code and tests must not depend on Calibre-specific fields.
+- Rationale: This keeps trusted reader metadata and spoiler-scope decisions at the reader boundary while preserving Cortex as a generic ingestion and filtered-retrieval service.
+- Consequences: Remove the direct SQLite connector and ebook parser dependencies. Add segment-aware storage, retrieval-stage filtering across dense/text/RRF, bounded adjacent expansion, filter-aware caching, and generic citations.
+- Evidence: User-provided contract attachment, 2026-07-11.
+- Supersedes: D-20260604-0520-calibre-sqlite-direct
+- Superseded by: D-20260711-calibre-content-server-boundary
+
+## D-20260711-calibre-content-server-boundary
+
+- Status: ACCEPTED
+- Date: 2026-07-11
+- Decision owner: User
+- Context: After defining the DSReaderHelper advanced QA contract, the user clarified that Chimera should still be able to import Calibre libraries independently, but never by reading `metadata.db`.
+- Decision: Chimera imports books through the standard read-only Calibre Content Server HTTP API. DSReaderHelper continues to own reader-specific scope resolution, locators, permissions, and advanced QA orchestration, using opaque Cortex filters where needed.
+- Rationale: Normal library ingestion remains available without coupling Chimera to Calibre's on-disk schema, while reader-specific semantics stay in DSReaderHelper.
+- Consequences: Implement a Content Server connector with explicit authentication and bounded format downloads. Keep the generic segment/filter contract for advanced QA. No direct SQLite access is permitted.
+- Evidence: User clarification, 2026-07-11.
+- Supersedes: D-20260711-dsreaderhelper-cortex-contract
+- Superseded by: N/A
+
+## D-20260711-infinity-rest-schema-migration
+
+- Status: ACCEPTED
+- Date: 2026-07-11
+- Decision owner: Codex (local compatibility adjustment)
+- Context: Existing vector tables lacked the four reader-contract columns. The installed Infinity Thrift SDK and configured server rejected each other's protocol versions during additive migration.
+- Decision: Use Infinity's standard REST columns endpoint for additive vector-table migrations and verify all registered KB tables during application startup.
+- Rationale: The REST endpoint is supported by the installed SDK implementation, avoids protocol-version coupling, and updates existing tables without rebuilding 17,089 FGO chunks.
+- Consequences: Startup requires Infinity schema access. Migration is idempotent because existing columns are inspected before POSTing only missing definitions.
+- Evidence: Real `chunks_fgo_lore` migration from five to nine columns and successful grounded retrieval after the change.
 - Supersedes: N/A
 - Superseded by: N/A
 

@@ -75,3 +75,94 @@
 - HEAD: `d0ec3af` (`docs: add repository contributor guide`)
 - Working-tree summary: Working tree has staged and untracked `.agents/` configuration and documentation files; `clean_index.py` is untracked.
 
+## 2026-07-10T15:20:39Z — Onboarding Reconciliation
+
+- Recorded branch and HEAD: `main` at `d0ec3af` in all role snapshots.
+- Actual branch and HEAD: `main` at `121f5a8`; `origin/main` matches.
+- Verified claims: Retrieval phases 1-4 are committed; Phase 4 symbols and timeout settings exist; Phase 5 is deferred; the approved multi-database plan has not started.
+- Stale claims: Recorded HEAD; untracked or staged `.agents/`, `.DS_Store`, and `clean_index.py`; the need to copy the architecture artifact; old benchmark results as evidence of current external state.
+- Conflicted claims: Role snapshots disagree on objective, working-tree state, and recent validation. Their request for a new workstream choice conflicts with the approved `READY` multi-database plan.
+- Unknown claims: External MySQL, MinIO, Redis, Infinity, Ollama, and reranker state; destructive rebuild and benchmark executions reported only in handoff prose.
+- Working-tree differences: Commit `121f5a8` added all handoff files and `.DS_Store`; the current working tree was clean before reconciliation.
+- Plan adjustments: Preserve legacy routes during staged migration; include direct API/UI/benchmark consumers when their behavior becomes KB-scoped; use the tracked architecture document.
+- Blockers: None for an additive Phase 1 schema and KB CRUD slice.
+- Selected next action: Add `knowledge_bases`, `sources`, and `ingestion_log` schema plus `/api/kb` CRUD, preserving current routes. Complete when route behavior is implemented and compile/import plus targeted API validation pass.
+
+## 2026-07-10T15:26:36Z — Phase 1 Foundation Milestone
+
+- Work completed: Added additive MySQL schema for `knowledge_bases`, `sources`, and `ingestion_log`; implemented KB metadata CRUD helpers and `/api/kb` CRUD routes; registered the router; added focused API tests.
+- Files materially changed: `app.py`, `cortex/core/database.py`, `cortex/api/kb.py`, `tests/test_kb_api.py`, and memory-bank status files.
+- Validation performed: `venv/bin/python -m compileall -q app.py cortex tests` (PASS); `venv/bin/python -m unittest discover -s tests -v` (PASS, 8 tests); `venv/bin/python -m pip check` (PASS); `git diff --check` (PASS).
+- Validation limitation: Ruff, Bandit, and MyPy are not installed or configured. Live MySQL schema/CRUD validation could not run because `192.168.11.35:3306` refused the connection outside the sandbox.
+- Plan status: Phase 1 moved from `READY` to `IN_PROGRESS`; no approved architectural intent changed.
+- Blocker: MySQL availability blocks live migration and API validation.
+- Next action: Add nullable document-to-source migration and bootstrap the existing corpus as `fgo-lore`, then provision KB-scoped storage while preserving compatibility routes.
+
+## 2026-07-10T16:37:23Z — Phase 1 Integration Milestone
+
+- Work completed: Implemented KB-scoped schema migration, default `fgo-lore` bootstrap, storage lifecycle, chat, documents, ingestion, cache, benchmark routing, directory connector/watchdog, compatibility paths, and KB-aware CLIs.
+- Live migration: Assigned all 413 existing documents to one directory source with source-level filename uniqueness and an FK.
+- Live rebuild: Indexed 413 files into `chunks_fgo_lore` with 17,089 chunks and uploaded 413 namespaced MinIO objects; legacy table and root objects remain preserved.
+- Live API validation: Six services healthy; KB/document/content/cache routes pass; scoped chat answered Galahad; legacy chat hit the same KB cache; temporary 1024-dimensional second KB passed full create/delete cleanup.
+- Benchmark validation: Run 33 completed with correctness 5.00, faithfulness 5.00, retrieval 5.00, and 100% pass rate. Run 34 is active for the 20-question dataset.
+- Static validation: Ruff PASS; Bandit medium/high PASS; MyPy PASS (24 files); compile PASS; unittest PASS (17); pip check PASS; diff check PASS.
+- Blockers: None.
+- Next action: Complete and inspect Run 34. If retrieval is at least 4.80, mark Phase 1 complete and begin Phase 2.
+
+## 2026-07-10T18:41:58Z — Phase 1 Accepted / Phase 2 Started
+
+- Work completed: Finished Phase 1 live validation and retrieval hardening. Added guarded query decomposition, balanced quotas, adaptive parent windows, independent per-KB rewrite/generation models, deterministic non-thinking generation, token limits, and focused grounded prompts.
+- Benchmark evidence: Run 34 scored C=4.65, F=4.70, R=4.65. Run 35 diagnosed over-decomposition and verbose generation at C=4.80, F=4.50, R=4.75. Run 36 was cancelled after a rewrite-model regression. Final Run 37 scored C=4.70, F=4.70, R=4.85, Pass=95%, satisfying the Phase 1 R>=4.80 gate.
+- Known edge case: QA-17 remains the strict-grounding nickname failure per accepted decision D-20260602-0316-reject-nickname-prompt-change.
+- Static validation: Ruff PASS; Bandit medium/high PASS; MyPy PASS (25 source files); compile PASS; unittest PASS (24); diff check PASS.
+- Plan status: Step 1 moved to `COMPLETED`; Step 2 moved to `IN_PROGRESS`.
+- Blockers: None.
+- Next action: Verify the connector/source/ingestion boundaries and current Crawl4AI/APScheduler APIs, then implement `WebConnector` and cron-based source scheduling with focused tests and a live crawl/sync/query smoke test.
+
+## 2026-07-11T00:13:23Z — Phase 2 Accepted / Phase 3 Started
+
+- Work completed: Added KB-scoped source CRUD/manual sync, source-aware ingestion, Crawl4AI 0.9 web crawling with bounded same-domain BFS, stable URL-derived filenames, source-namespaced MinIO storage, APScheduler 3.11 cron registration, observable scheduler status, and scheduler refresh on source/KB lifecycle changes.
+- Dependency validation: Crawl4AI setup and doctor passed. NumPy 1.26 and SciPy 1.16 constraints resolve the Crawl4AI/Infinity SDK compatibility boundary; `pip check` passes.
+- Static validation: Ruff PASS; Bandit medium/high PASS; MyPy PASS (26 source files); compile PASS; unittest PASS (32); diff check PASS.
+- Live validation: Crawled FastAPI First Steps into a temporary KB, indexed one document/89 chunks, returned correct Swagger UI and ReDoc URLs through KB-scoped chat, skipped unchanged content on a second sync, exposed a live cron job and next run, then removed the temporary KB. API returned 404, Infinity reported the table absent, and the MinIO prefix contained zero objects after deletion.
+- Plan status: Step 2 moved to `COMPLETED`; Step 3 moved to `IN_PROGRESS`.
+- Blockers: None.
+- Next action: Implement the read-only Calibre metadata connector and ebook normalization with fixture and live temporary-library validation.
+
+## 2026-07-11T00:41:33Z — Phase 3 dual-boundary implementation
+
+- User superseded direct `metadata.db` access: Chimera may import through the standard Calibre Content Server API; DSReaderHelper retains reader-specific scope/locator/advanced QA responsibilities.
+- Removed the rejected direct-SQLite connector and replaced it with HTTP pagination, metadata fetch, format download, Basic/Digest auth via `password_env`, and EPUB/PDF/text segment extraction.
+- Added generic external-document PUT/DELETE/batch APIs, opaque IDs, ordered segment vector fields, Infinity schema migration, and generic external sources.
+- Added retrieval-stage document/source/ordinal filters shared by dense, text, RRF, and adjacent expansion; cache keys include filters, caps, top-K, and external context; citations expose opaque IDs and locators.
+- Added frozen Calibre and external-document fixtures. Ruff, Bandit, MyPy, compileall, 38 unit tests, pip check, and diff check pass.
+- Live external validation passed: capped ordinal 126 excluded ordinal 127 from contexts/audit/prompt/citations, uncapped control returned it, and delete/storage cleanup succeeded.
+- Real Calibre Content Server smoke is pending: no server is reachable, and Calibre rejects starting a second server while the user's current Calibre program is running.
+
+## 2026-07-11T00:49:05Z — Phase 3 accepted / Phase 4 started
+
+- Validated all six core services through `/api/status`; Ollama models and the llama.cpp reranker are available on `192.168.11.40`.
+- Discovered Calibre listening on the host LAN interface `192.168.11.65:8080` with default library `Calibre_Library`.
+- Created a temporary KB and Calibre source restricted to one EPUB. Imported `Quick Start Guide` into 78 segment-aware chunks and returned a correct grounded answer for the Add Books workflow.
+- A second sync processed the same book with zero new chunks. KB deletion returned API 404 afterward and Infinity confirmed the temporary table was absent.
+- Plan status: Step 3 moved to `COMPLETED`; Step 4 moved to `IN_PROGRESS`.
+- Next action: Implement Google Drive, OneDrive, and Dropbox connectors with credential-safe configs, incremental cursors, fixture tests, and a Google Drive live sync when credentials are available.
+
+## 2026-07-11T01:21:51Z — Cloud connectors and management UI milestone
+
+- Implemented Google Drive, OneDrive, and Dropbox connectors with credential-safe source configs, native Google exports, OneDrive delta links, Dropbox cursors, cloud format normalization, persisted cursors, and opaque origin-path deletion.
+- Live fixture-backed cloud pipeline used actual MySQL, MinIO, Infinity, Ollama, and reranker: initial sync indexed Alpha/Beta, incremental sync updated Alpha and deleted Beta, persisted cursor two, answered the updated fact, and cleaned up the temporary KB.
+- Added ingestion activity logging and the complete management UI: KB overview/comparison/CRUD, source CRUD/sync, document browse/view/delete, activity/config views, cache clear, and KB-scoped Chat.
+- Browser QA passed at 1440x900 and 390x844. Large document tables and workspace tabs scroll within stable bounds; no viewport overflow remains. Source forms and accessible icon navigation passed.
+- Live UI query initially exposed an Infinity 500. Root cause was the legacy five-column FGO table combined with unconditional reader-contract output columns; the previous Thrift migrator could not connect because client/server protocol versions differ.
+- Replaced the Thrift migration with the supported REST columns endpoint and added startup migration for every existing KB. `chunks_fgo_lore` now has nine columns; the UI returned Gawain's B+ Strength with 10 contexts and opened the original source.
+- Validation: 46 pytest tests, Ruff, Bandit, MyPy, Node syntax, and diff checks pass. Six services are healthy. Phase 5 is complete; Phase 4 awaits official cloud credentials for the final provider smoke test.
+
+## 2026-07-11T01:29:42Z — Cloud incremental reliability hardening
+
+- Completion audit found that provider renames changed generated filenames, causing duplicate cloud documents and orphaned objects during incremental sync. Cloud filenames now derive from provider file ID plus extension, and cloud ingestion matches existing rows by opaque `origin_path`.
+- Unchanged renamed content now refreshes title and metadata without re-embedding. Extension/key changes update the existing row and remove the replaced MinIO object.
+- Google Drive changes that move a file outside the configured folder set now emit an opaque deletion path.
+- Google Drive, OneDrive, and Dropbox now fail the sync batch when an eligible file cannot be downloaded or normalized, preventing the provider cursor from advancing past an unprocessed file.
+- Live rename/delete validation used actual MySQL, MinIO, Infinity, and Ollama: the provider file retained document ID 419, updated its title in place, kept exactly one MinIO object, then deleted both metadata and object when moved out. Temporary KB and Infinity cleanup passed.
+- Validation: 50 pytest tests, Ruff, Bandit, MyPy, Node syntax, and diff checks pass. Official-provider credentials remain the only Phase 4 acceptance gap.

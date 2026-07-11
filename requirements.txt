@@ -4,4 +4,17 @@ mysql-connector-python
 redis
 minio
 infinity-sdk
+numpy>=1.26,<2
+scipy>=1,<1.17
 httpx
+watchdog
+crawl4ai>=0.9,<1
+APScheduler>=3.11,<4
+EbookLib>=0.20,<1
+beautifulsoup4>=4.12,<5
+PyMuPDF>=1.24,<2
+google-api-python-client>=2.170,<3
+google-auth>=2.40,<3
+msgraph-sdk>=1.30,<2
+dropbox>=12,<13
+python-docx>=1.2,<2

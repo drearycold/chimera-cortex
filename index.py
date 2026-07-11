@@ -43,6 +43,7 @@ def cmd_run(args):
     print("=" * 60)
     print(f"  API URL       : {args.api_url}")
     print(f"  Source Dir    : {args.source_dir}")
+    print(f"  Knowledge Base: {args.kb}")
     print(f"  Force Rebuild : {args.force_rebuild}")
     print("=" * 60)
 
@@ -50,6 +51,7 @@ def cmd_run(args):
     resp = _api(args.api_url, "post", "/api/ingest/run", json={
         "source_dir": args.source_dir,
         "force_rebuild": args.force_rebuild,
+        "kb_slug": args.kb,
     })
 
     if resp.status_code == 400:
@@ -103,8 +105,8 @@ def cmd_run(args):
 
     except KeyboardInterrupt:
         print("\n\n[INFO] Detached from progress polling. The ingestion run continues on the server.")
-        print(f"[INFO] Re-attach:  python index.py status")
-        print(f"[INFO] Stop it:    python index.py stop")
+        print("[INFO] Re-attach:  python index.py status")
+        print("[INFO] Stop it:    python index.py stop")
 
 def cmd_status(args):
     """Show the current ingestion status."""
@@ -161,6 +163,11 @@ sub-commands (positional):
         "--source-dir",
         default="documents",
         help="Path to source directory of markdown documents (default: documents)",
+    )
+    parser.add_argument(
+        "--kb",
+        default="fgo-lore",
+        help="Knowledge base slug to ingest (default: fgo-lore)",
     )
     parser.add_argument(
         "--force-rebuild",

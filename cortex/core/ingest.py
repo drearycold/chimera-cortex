@@ -7,17 +7,46 @@ and stores vector vectors inside Infinity DB.
 """
 
 import os
-import sys
-import glob
 import io
+import json
 import httpx
 import threading
-import hashlib
-from concurrent.futures import ThreadPoolExecutor
+import time
+from datetime import datetime, timezone
 
 from .config import INFINITY_API_URL
-from .database import get_mysql_connection, get_minio_client
-from .rag import parse_document_title, chunk_markdown, get_embedding, get_embeddings_batch
+from .connectors import (
+    CalibreConnector,
+    DirectoryConnector,
+    DropboxConnector,
+    GoogleDriveConnector,
+    OneDriveConnector,
+    WebConnector,
+)
+from .connectors.base import RawDocument
+from .database import (
+    get_knowledge_base,
+    get_minio_client,
+    get_mysql_connection,
+    get_or_create_directory_source,
+    get_source,
+    record_ingestion_log,
+)
+from .kb_config import DEFAULT_KB_SLUG
+from .external_documents import build_segment_chunks
+from .kb_storage import (
+    ensure_external_vector_columns,
+    ensure_minio_bucket,
+    ensure_vector_table,
+)
+from .rag import chunk_markdown, get_embeddings_batch, parse_document_title
+
+
+def document_identity(raw_document: RawDocument) -> tuple[str, str]:
+    """Return the stable database identity for a connector document."""
+    if raw_document.source_type == "cloud_drive" and raw_document.origin_path:
+        return "origin_path", raw_document.origin_path
+    return "filename", raw_document.filename
 
 class IngestManager:
     """Thread-safe manager ensuring at most one ingestion run is in progress."""
@@ -32,9 +61,16 @@ class IngestManager:
         self.current_file = ""
         self.error_message = ""
         self.total_chunks_indexed = 0
+        self.kb_slug = None
+        self.source_id = None
         self.thread = None
 
-    def start(self, source_dir="documents", force_rebuild=False):
+    def start(
+        self,
+        source_dir="documents",
+        force_rebuild=False,
+        kb_slug=DEFAULT_KB_SLUG,
+    ):
         """Start document ingestion asynchronously in a background thread."""
         with self.lock:
             if self.is_running:
@@ -47,12 +83,41 @@ class IngestManager:
             self.current_file = ""
             self.error_message = ""
             self.total_chunks_indexed = 0
+            self.kb_slug = kb_slug
+            self.source_id = None
             
         self.thread = threading.Thread(
             target=self._run_wrapper,
-            args=(source_dir, force_rebuild)
+            args=(source_dir, force_rebuild, kb_slug)
         )
         self.thread.daemon = True
+        self.thread.start()
+
+    def start_source(
+        self,
+        kb_slug: str,
+        source_id: int,
+        force_rebuild: bool = False,
+    ):
+        with self.lock:
+            if self.is_running:
+                raise ValueError("An ingestion run is already in progress.")
+            self.cancel_event.clear()
+            self.is_running = True
+            self.status = "running"
+            self.processed_files = 0
+            self.total_files = 0
+            self.current_file = ""
+            self.error_message = ""
+            self.total_chunks_indexed = 0
+            self.kb_slug = kb_slug
+            self.source_id = source_id
+
+        self.thread = threading.Thread(
+            target=self._run_wrapper,
+            args=(None, force_rebuild, kb_slug, source_id),
+            daemon=True,
+        )
         self.thread.start()
 
     def stop(self):
@@ -72,7 +137,9 @@ class IngestManager:
                 "total_files": self.total_files,
                 "current_file": self.current_file,
                 "error_message": self.error_message,
-                "total_chunks_indexed": self.total_chunks_indexed
+                "total_chunks_indexed": self.total_chunks_indexed,
+                "kb_slug": self.kb_slug,
+                "source_id": self.source_id,
             }
 
     def clear_active(self):
@@ -81,185 +148,203 @@ class IngestManager:
             self.is_running = False
             self.thread = None
 
-    def _run_wrapper(self, source_dir, force_rebuild):
+    def _run_wrapper(self, source_dir, force_rebuild, kb_slug, source_id=None):
+        started_at = time.monotonic()
         try:
-            self._run_ingest(source_dir, force_rebuild)
+            self._run_ingest(source_dir, force_rebuild, kb_slug, source_id)
         except Exception as e:
             print(f"[ERROR] Ingestion background thread crashed: {e}")
             with self.lock:
                 self.status = "failed"
                 self.error_message = str(e)
         finally:
+            try:
+                record_ingestion_log(
+                    kb_slug=kb_slug,
+                    source_id=source_id,
+                    action="force_rebuild" if force_rebuild else "sync",
+                    docs_processed=self.processed_files,
+                    docs_skipped=max(0, self.total_files - self.processed_files),
+                    docs_failed=1 if self.status == "failed" else 0,
+                    duration_seconds=time.monotonic() - started_at,
+                    error_detail=self.error_message or None,
+                )
+            except Exception as log_error:
+                print(f"[Warning] Failed to record ingestion log: {log_error}")
             self.clear_active()
 
-    def _run_ingest(self, source_dir, force_rebuild=False):
-        print(f"[INGEST] Starting ingestion from '{source_dir}' (force_rebuild={force_rebuild})")
+    def _run_ingest(
+        self,
+        source_dir,
+        force_rebuild=False,
+        kb_slug=DEFAULT_KB_SLUG,
+        source_id=None,
+    ):
+        print(
+            f"[INGEST] Starting ingestion for KB '{kb_slug}' "
+            f"source={source_id or source_dir!r} (force_rebuild={force_rebuild})"
+        )
 
-        
-        # 1. Connect to MinIO
-        print("[INGEST] Connecting to MinIO...")
-        try:
-            minio_client = get_minio_client()
-            bucket_name = "cortex-documents"
-            if not minio_client.bucket_exists(bucket_name):
-                minio_client.make_bucket(bucket_name)
-                print(f"[INGEST] Created MinIO bucket '{bucket_name}'")
-            else:
-                print(f"[INGEST] MinIO bucket '{bucket_name}' already exists.")
-        except Exception as e:
-            raise Exception(f"FAILED to connect to MinIO: {e}")
-            
-        # 2. Connect to MySQL & Setup Relational DB
-        print("[INGEST] Connecting to MySQL...")
-        try:
-            from .config import MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASS
-            import mysql.connector
-            mysql_conn = mysql.connector.connect(
-                host=MYSQL_HOST,
-                port=MYSQL_PORT,
-                user=MYSQL_USER,
-                password=MYSQL_PASS
-            )
-            cursor = mysql_conn.cursor()
-            cursor.execute("CREATE DATABASE IF NOT EXISTS cortex_rag")
-            cursor.execute("USE cortex_rag")
-            
-            cursor.execute("""
-            CREATE TABLE IF NOT EXISTS documents (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                filename VARCHAR(255) UNIQUE NOT NULL,
-                title VARCHAR(255) NOT NULL,
-                size_bytes INT NOT NULL,
-                chunk_count INT NOT NULL,
-                content_hash VARCHAR(64)
-            )
-            """)
-            
-            # Ensure content_hash column exists for older database installations
-            try:
-                cursor.execute("ALTER TABLE documents ADD COLUMN content_hash VARCHAR(64)")
-            except mysql.connector.Error as err:
-                # 1060: Duplicate column name, meaning it already exists
-                if err.errno != 1060:
-                    raise err
+        knowledge_base = get_knowledge_base(kb_slug)
+        if knowledge_base is None or not knowledge_base["enabled"]:
+            raise ValueError(f"Knowledge base '{kb_slug}' does not exist or is disabled.")
 
-            mysql_conn.commit()
-            cursor.close()
-            mysql_conn.close()
-            print("[INGEST] MySQL Database & Tables set up successfully.")
-        except Exception as e:
-            raise Exception(f"FAILED to connect/setup MySQL: {e}")
-            
-        # 3. Connect to Infinity & Setup Vector DB (HTTP REST API)
-        print("[INGEST] Connecting to Infinity Vector DB (HTTP)...")
+        ingest_config = knowledge_base["ingest_config"]
+        embedding_config = ingest_config.get("embedding", {})
+        chunking_config = ingest_config.get("chunking", {})
+        embedding_model = embedding_config.get("model", "nomic-embed-text:latest")
+        max_chars = int(chunking_config.get("max_chars", 600))
+        overlap_chars = int(chunking_config.get("overlap_chars", 120))
+        vector_table = knowledge_base["vector_table"]
+        bucket_name = knowledge_base["minio_bucket"]
+        # 1. Ensure KB-specific storage exists
+        print("[INGEST] Connecting to KB storage...")
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         try:
-            # Drop table if force_rebuild is True
-            if force_rebuild:
-                try:
-                    res_del = httpx.request(
-                        "DELETE",
-                        f"{INFINITY_API_URL}/databases/default_db/tables/chunks",
-                        json={},
-                        headers=headers,
-                        timeout=5.0
-                    )
-                    if res_del.status_code == 200:
-                        print("[INGEST] Dropped existing Infinity table 'chunks'.")
-                    else:
-                        print(f"[INGEST] Table drop info: {res_del.text}")
-                except Exception as e:
-                    print(f"[INGEST] Ignore drop table warning: {e}")
-                
-            # Check if table exists
-            table_exists = False
-            try:
-                chk_res = httpx.get(f"{INFINITY_API_URL}/databases/default_db/tables/chunks", headers=headers, timeout=2.0)
-                if chk_res.status_code == 200:
-                    body = chk_res.json()
-                    if body.get("error_code", 0) == 0:
-                        table_exists = True
-                        print("[INGEST] Infinity table 'chunks' already exists.")
-            except Exception as e:
-                print(f"[INGEST] Check table existence warning: {e}")
+            ensure_minio_bucket(knowledge_base)
+            vector_table_created = ensure_vector_table(
+                knowledge_base,
+                force_rebuild=force_rebuild,
+            )
+            if not vector_table_created:
+                ensure_external_vector_columns(knowledge_base)
+            minio_client = get_minio_client()
+        except Exception as exc:
+            raise Exception(f"FAILED to connect/setup KB storage: {exc}") from exc
+            
+        # 2. Resolve the requested source and normalize it through a connector.
+        if source_id is None:
+            target_dir = source_dir
+            if not os.path.exists(target_dir):
+                if source_dir == "documents" and os.path.exists("servant_lore_md_v3"):
+                    target_dir = "servant_lore_md_v3"
+                else:
+                    raise Exception(f"Source directory '{source_dir}' does not exist.")
+            source = get_or_create_directory_source(knowledge_base["id"], target_dir)
+        else:
+            source = get_source(knowledge_base["id"], int(source_id))
+            if source is None or not source["enabled"]:
+                raise ValueError(
+                    f"Enabled source {source_id} does not exist in KB '{kb_slug}'."
+                )
 
-            if not table_exists:
-                # Create Table chunks
-                payload = {
-                    "fields": [
-                        {"name": "document_id", "type": "integer"},
-                        {"name": "chunk_index", "type": "integer"},
-                        {"name": "document_title", "type": "varchar"},
-                        {"name": "content", "type": "varchar"},
-                        {"name": "vec", "type": "vector, 768, float"}
-                    ]
-                }
-                res = httpx.post(f"{INFINITY_API_URL}/databases/default_db/tables/chunks", json=payload, headers=headers, timeout=5.0)
-                res.raise_for_status()
-                if res.json().get("error_code", 0) != 0:
-                    # Double check if duplicate table error
-                    err_msg = res.json().get("error_msg", "")
-                    if "already exists" in err_msg.lower() or "duplicate" in err_msg.lower():
-                        print("[INGEST] Infinity table 'chunks' already exists (ignoring duplicate error).")
-                    else:
-                        raise Exception(err_msg)
-                else:
-                    print("[INGEST] Infinity table 'chunks' created successfully.")
-            
-            # Create Full-Text index on 'content'
+        if source["type"] == "directory":
+            target_dir = source["config"]["path"]
+            connector = DirectoryConnector(
+                knowledge_base["id"],
+                source["id"],
+                target_dir,
+                source["config"].get("glob_patterns", ["*.md"]),
+            )
+        elif source["type"] == "web":
+            connector = WebConnector(
+                knowledge_base["id"],
+                source["id"],
+                source["config"],
+            )
+        elif source["type"] == "calibre":
+            connector = CalibreConnector(
+                knowledge_base["id"],
+                source["id"],
+                source["config"],
+            )
+        elif source["type"] == "cloud_drive":
+            provider = source["config"]["provider"]
+            connector_types = {
+                "google_drive": GoogleDriveConnector,
+                "onedrive": OneDriveConnector,
+                "dropbox": DropboxConnector,
+            }
             try:
-                idx_payload = {
-                    "create_option": "ignore_if_exists",
-                    "fields": ["content"],
-                    "index": {
-                        "type": "FULLTEXT",
-                        "params": {"analyzer": "standard"}
-                    }
-                }
-                idx_res = httpx.post(f"{INFINITY_API_URL}/databases/default_db/tables/chunks/indexes/content_fts", json=idx_payload, headers=headers, timeout=10.0)
-                idx_res.raise_for_status()
-                if idx_res.json().get("error_code", 0) == 0:
-                    print("[INGEST] Infinity full-text index 'content_fts' verified/created.")
-                else:
-                    print(f"[INGEST] Warning creating full-text index: {idx_res.text}")
-            except Exception as e:
-                print(f"[INGEST] Warning creating full-text index: {e}")
-        except Exception as e:
-            raise Exception(f"FAILED to connect/setup Infinity: {e}")
+                connector_type = connector_types[provider]
+            except KeyError as exc:
+                raise ValueError(f"Unsupported cloud drive provider '{provider}'.") from exc
+            connector = connector_type(
+                knowledge_base["id"],
+                source["id"],
+                source["config"],
+            )
+        else:
+            raise ValueError(f"Unsupported source type '{source['type']}'.")
+        object_prefix = (
+            f"{kb_slug}/sources/{source['id']}/"
+            if source["type"] in {"web", "calibre", "cloud_drive"}
+            else f"{kb_slug}/"
+        )
+        try:
+            raw_documents = connector.scan()
+        finally:
+            close_connector = getattr(connector, "close", None)
+            if close_connector is not None:
+                close_connector()
+
+        is_full_snapshot = bool(getattr(connector, "is_full_snapshot", True))
+        deleted_origin_paths = set(getattr(connector, "deleted_origin_paths", []))
+        next_cursor = getattr(connector, "next_cursor", None)
+        connector_config = dict(getattr(connector, "config", source["config"]))
+
+        if not raw_documents and not bool(getattr(connector, "allow_empty", False)):
+            raise Exception(f"Source {source['id']} returned no documents.")
             
-        # 4. Search and Process Markdown Files
-        target_dir = source_dir
-        if not os.path.exists(target_dir):
-            # Fallback to servant_lore_md_v3 if documents doesn't exist
-            if source_dir == "documents" and os.path.exists("servant_lore_md_v3"):
-                target_dir = "servant_lore_md_v3"
-            else:
-                raise Exception(f"Source directory '{source_dir}' does not exist.")
-                
-        search_path = os.path.join(target_dir, "*.md")
-        files = glob.glob(search_path)
-        
-        if not files:
-            raise Exception(f"No markdown files found in '{target_dir}'.")
-            
-        print(f"[INGEST] Found {len(files)} markdown files to process from '{target_dir}'.")
+        print(
+            f"[INGEST] Found {len(raw_documents)} documents to process "
+            f"from source {source['id']} ({source['type']})."
+        )
         
         with self.lock:
-            self.total_files = len(files)
+            self.total_files = len(raw_documents)
             
         doc_success_count = 0
         total_chunks_indexed = 0
-        chunk_queue = []
+        chunk_queue: list[dict] = []
         
         # Track chunk completion: { doc_id: {"total": total, "flushed": 0, "hash": file_hash} }
-        chunk_progress = {}
+        chunk_progress: dict[int, dict] = {}
 
-        def compute_sha256(text):
-            return hashlib.sha256(text.encode("utf-8")).hexdigest()
-        
         # Establish unified MySQL connection
         mysql_conn = get_mysql_connection()
         cursor = mysql_conn.cursor()
+
+        if force_rebuild or vector_table_created:
+            cursor.execute("""
+                UPDATE documents
+                SET content_hash = NULL, status = 'pending', indexed_at = NULL
+                WHERE source_id = %s
+            """, (source["id"],))
+            mysql_conn.commit()
+
+        current_filenames = {document.filename for document in raw_documents}
+        cursor.execute(
+            "SELECT id, filename, minio_key, origin_path FROM documents WHERE source_id = %s",
+            (source["id"],),
+        )
+        for document_id, filename, minio_key, origin_path in cursor.fetchall():
+            should_delete = (
+                filename not in current_filenames
+                if is_full_snapshot
+                else origin_path in deleted_origin_paths
+            )
+            if not should_delete:
+                continue
+            try:
+                response = httpx.request(
+                    "DELETE",
+                    f"{INFINITY_API_URL}/databases/default_db/tables/{vector_table}/docs",
+                    json={"filter": f"document_id = {document_id}"},
+                    headers=headers,
+                    timeout=10.0,
+                )
+                response.raise_for_status()
+                minio_client.remove_object(bucket_name, minio_key)
+                cursor.execute("DELETE FROM documents WHERE id = %s", (document_id,))
+                mysql_conn.commit()
+                print(f"[INGEST] Removed deleted source document '{filename}'.")
+            except Exception as exc:
+                mysql_conn.rollback()
+                print(
+                    f"[Warning] Preserved deleted-source metadata for '{filename}' "
+                    f"because storage cleanup failed: {exc}"
+                )
         
         def flush_chunk_queue():
             nonlocal total_chunks_indexed
@@ -268,7 +353,7 @@ class IngestManager:
             
             print(f"   [INGEST] Flushing batch of {len(chunk_queue)} chunks to Ollama & Infinity DB...")
             chunk_texts = [item["content"] for item in chunk_queue]
-            embeddings = get_embeddings_batch(chunk_texts)
+            embeddings = get_embeddings_batch(chunk_texts, model=embedding_model)
             
             infinity_batch = []
             for idx, item in enumerate(chunk_queue):
@@ -281,13 +366,17 @@ class IngestManager:
                     "chunk_index": item["chunk_index"],
                     "document_title": item["document_title"],
                     "content": item["content"],
+                    "external_id": item["external_id"],
+                    "source_key": item["source_key"],
+                    "segment_ordinal": item["segment_ordinal"],
+                    "segment_locator": item["segment_locator"],
                     "vec": emb
                 })
             
             if infinity_batch:
                 # Direct HTTP POST to table/docs
                 docs_res = httpx.post(
-                    f"{INFINITY_API_URL}/databases/default_db/tables/chunks/docs",
+                    f"{INFINITY_API_URL}/databases/default_db/tables/{vector_table}/docs",
                     json=infinity_batch,
                     headers=headers,
                     timeout=30.0
@@ -310,7 +399,8 @@ class IngestManager:
                             try:
                                 print(f"   [INGEST] Document ID {doc_id} completely indexed. Committing content_hash to MySQL...")
                                 cursor.execute(
-                                    "UPDATE documents SET content_hash = %s WHERE id = %s",
+                                    "UPDATE documents SET content_hash = %s, status = 'indexed', "
+                                    "indexed_at = CURRENT_TIMESTAMP WHERE id = %s",
                                     (chunk_progress[doc_id]["hash"], doc_id)
                                 )
                                 mysql_conn.commit()
@@ -319,55 +409,91 @@ class IngestManager:
             
             chunk_queue.clear()
             
-        for file_idx, filepath in enumerate(files, 1):
+        for file_idx, raw_document in enumerate(raw_documents, 1):
             # Graceful cancellation check
             if self.cancel_event.is_set():
-                print(f"[INGEST] Ingestion cancelled by user request.")
+                print("[INGEST] Ingestion cancelled by user request.")
                 with self.lock:
                     self.status = "cancelled"
                 break
                 
-            filename = os.path.basename(filepath)
-            doc_title = parse_document_title(filename)
+            filename = raw_document.filename
+            doc_title = raw_document.title or parse_document_title(filename)
+            doc_id = None
             
             with self.lock:
                 self.current_file = filename
                 
-            print(f"[INGEST] [{file_idx}/{len(files)}] Checking '{filename}'...")
+            print(
+                f"[INGEST] [{file_idx}/{len(raw_documents)}] "
+                f"Checking '{filename}'..."
+            )
             
             try:
-                with open(filepath, "r", encoding="utf-8") as f:
-                    content = f.read()
-                    
-                file_hash = compute_sha256(content)
-                content_bytes = content.encode("utf-8")
+                content = raw_document.content_markdown
+                file_hash = raw_document.content_hash
+                content_bytes = raw_document.raw_bytes
                 size_bytes = len(content_bytes)
+                minio_key = f"{object_prefix}{filename}"
+                source_modified_at = datetime.fromtimestamp(
+                    raw_document.source_modified_at,
+                    tz=timezone.utc,
+                ).replace(tzinfo=None)
                 
-                # Check MySQL if file exists, its hash, and chunk count
-                cursor.execute(
-                    "SELECT id, content_hash FROM documents WHERE filename = %s",
-                    (filename,)
-                )
+                # Match cloud files by provider identity so renames do not duplicate them.
+                identity_column, identity_value = document_identity(raw_document)
+                if identity_column == "origin_path":
+                    cursor.execute(
+                        "SELECT id, content_hash, filename, minio_key FROM documents "
+                        "WHERE source_id = %s AND origin_path = %s",
+                        (source["id"], identity_value),
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT id, content_hash, filename, minio_key FROM documents "
+                        "WHERE source_id = %s AND filename = %s",
+                        (source["id"], identity_value),
+                    )
                 existing = cursor.fetchone()
+                previous_minio_key = None
                 
                 if existing:
-                    doc_id, db_hash = existing
-                    if not force_rebuild and db_hash == file_hash:
-                        print(f"   -> Unchanged. Skipping.")
+                    doc_id, db_hash, previous_filename, previous_minio_key = existing
+                    if (
+                        not force_rebuild
+                        and db_hash == file_hash
+                        and previous_filename == filename
+                    ):
+                        cursor.execute(
+                            "UPDATE documents SET title=%s, format=%s, metadata=%s, "
+                            "source_modified_at=%s WHERE id=%s",
+                            (
+                                doc_title,
+                                raw_document.format,
+                                json.dumps(raw_document.metadata),
+                                source_modified_at,
+                                doc_id,
+                            ),
+                        )
+                        mysql_conn.commit()
+                        print("   -> Unchanged. Skipping.")
                         doc_success_count += 1
                         with self.lock:
                             self.processed_files = doc_success_count
                         continue
                     
                     # File exists but hash differs or rebuild is forced. Clean old chunks.
-                    print(f"   -> Outdated, incomplete, or rebuild forced. Deleting existing chunks from Infinity DB...")
+                    print(
+                        "   -> Outdated, incomplete, or rebuild forced. "
+                        "Deleting existing chunks from Infinity DB..."
+                    )
                     try:
                         delete_payload = {
                             "filter": f"document_id = {doc_id}"
                         }
                         resp = httpx.request(
                             "DELETE",
-                            f"{INFINITY_API_URL}/databases/default_db/tables/chunks/docs",
+                            f"{INFINITY_API_URL}/databases/default_db/tables/{vector_table}/docs",
                             json=delete_payload,
                             headers=headers,
                             timeout=10.0
@@ -381,34 +507,91 @@ class IngestManager:
                 # A. Upload raw file to MinIO
                 minio_client.put_object(
                     bucket_name,
-                    filename,
+                    minio_key,
                     io.BytesIO(content_bytes),
                     length=size_bytes,
                     content_type="text/markdown"
                 )
                 
                 # B. Chunk markdown
-                chunks = chunk_markdown(content, doc_title)
+                if raw_document.segments:
+                    segment_chunks = build_segment_chunks(
+                        doc_title,
+                        raw_document.segments,
+                        max_chars=max_chars,
+                        overlap_chars=overlap_chars,
+                    )
+                    chunks = [
+                        ("", item["content"])
+                        for item in segment_chunks
+                    ]
+                else:
+                    segment_chunks = []
+                    chunks = chunk_markdown(
+                        content,
+                        doc_title,
+                        max_chars=max_chars,
+                        overlap_chars=overlap_chars,
+                    )
                 chunk_count = len(chunks)
                 print(f"   -> Split into {chunk_count} semantic chunks.")
                 
                 # C. Register/Update document in MySQL. Set content_hash = NULL initially
                 if doc_id:
                     cursor.execute(
-                        "UPDATE documents SET title=%s, size_bytes=%s, chunk_count=%s, content_hash=NULL WHERE id=%s",
-                        (doc_title, size_bytes, chunk_count, doc_id)
+                        "UPDATE documents SET filename=%s, title=%s, format=%s, size_bytes=%s, "
+                        "chunk_count=%s, content_hash=NULL, status='pending', metadata=%s, "
+                        "external_id=%s, source_key=%s, origin_path=%s, minio_key=%s, "
+                        "source_modified_at=%s WHERE id=%s",
+                        (
+                            filename,
+                            doc_title,
+                            raw_document.format,
+                            size_bytes,
+                            chunk_count,
+                            json.dumps(raw_document.metadata),
+                            raw_document.external_id or None,
+                            raw_document.source_key or None,
+                            raw_document.origin_path,
+                            minio_key,
+                            source_modified_at,
+                            doc_id,
+                        )
                     )
                 else:
                     cursor.execute(
-                        "INSERT INTO documents (filename, title, size_bytes, chunk_count, content_hash) "
-                        "VALUES (%s, %s, %s, %s, NULL)",
-                        (filename, doc_title, size_bytes, chunk_count)
+                        "INSERT INTO documents (source_id, filename, title, format, size_bytes, "
+                        "chunk_count, content_hash, status, metadata, external_id, source_key, origin_path, "
+                        "minio_key, source_modified_at) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, NULL, 'pending', %s, %s, %s, %s, %s, %s)",
+                        (
+                            source["id"],
+                            filename,
+                            doc_title,
+                            raw_document.format,
+                            size_bytes,
+                            chunk_count,
+                            json.dumps(raw_document.metadata),
+                            raw_document.external_id or None,
+                            raw_document.source_key or None,
+                            raw_document.origin_path,
+                            minio_key,
+                            source_modified_at,
+                        )
                     )
                     mysql_conn.commit()
-                    cursor.execute("SELECT id FROM documents WHERE filename = %s", (filename,))
-                    doc_id = cursor.fetchone()[0]
+                    doc_id = cursor.lastrowid
                 
                 mysql_conn.commit()
+
+                if previous_minio_key and previous_minio_key != minio_key:
+                    try:
+                        minio_client.remove_object(bucket_name, previous_minio_key)
+                    except Exception as exc:
+                        print(
+                            f"      [Warning] Failed to remove replaced object "
+                            f"'{previous_minio_key}': {exc}"
+                        )
                 
                 # Initialize progress tracking
                 chunk_progress[doc_id] = {
@@ -420,18 +603,28 @@ class IngestManager:
                 if chunk_count == 0:
                     # Empty file gets marked completed immediately
                     cursor.execute(
-                        "UPDATE documents SET content_hash = %s WHERE id = %s",
+                        "UPDATE documents SET content_hash = %s, status = 'indexed', "
+                        "indexed_at = CURRENT_TIMESTAMP WHERE id = %s",
                         (file_hash, doc_id)
                     )
                     mysql_conn.commit()
                 
                 # D. Add chunks to global queue and flush when threshold reached
                 for chunk_idx, (head, chunk_text) in enumerate(chunks):
+                    segment = segment_chunks[chunk_idx] if segment_chunks else None
                     chunk_queue.append({
                         "document_id": doc_id,
                         "chunk_index": chunk_idx,
                         "document_title": doc_title,
-                        "content": chunk_text
+                        "content": chunk_text,
+                        "external_id": raw_document.external_id,
+                        "source_key": raw_document.source_key,
+                        "segment_ordinal": (
+                            segment["segment_ordinal"] if segment else -1
+                        ),
+                        "segment_locator": (
+                            segment["segment_locator"] if segment else ""
+                        ),
                     })
                     
                     if len(chunk_queue) >= 64:
@@ -445,6 +638,15 @@ class IngestManager:
             except Exception as e:
                 print(f"   [ERROR] Failed to ingest '{filename}': {e}")
                 mysql_conn.rollback()
+                if doc_id:
+                    try:
+                        cursor.execute(
+                            "UPDATE documents SET status = 'error' WHERE id = %s",
+                            (doc_id,),
+                        )
+                        mysql_conn.commit()
+                    except Exception:
+                        mysql_conn.rollback()
                 
         # E. Flush any remaining chunks in the queue
         if chunk_queue and self.status != "cancelled":
@@ -455,13 +657,33 @@ class IngestManager:
                 
         cursor.close()
         mysql_conn.close()
+
+        sync_conn = get_mysql_connection()
+        sync_cursor = sync_conn.cursor()
+        if next_cursor:
+            connector_config["cursor"] = next_cursor
+            sync_cursor.execute(
+                "UPDATE sources SET config = %s, last_synced_at = CURRENT_TIMESTAMP WHERE id = %s",
+                (json.dumps(connector_config), source["id"]),
+            )
+        else:
+            sync_cursor.execute(
+                "UPDATE sources SET last_synced_at = CURRENT_TIMESTAMP WHERE id = %s",
+                (source["id"],),
+            )
+        sync_conn.commit()
+        sync_cursor.close()
+        sync_conn.close()
         
         with self.lock:
             if self.status != "cancelled":
                 self.status = "completed"
                 
-        print(f"\n[INGEST] Ingestion Complete")
-        print(f"[INGEST] Successfully processed {doc_success_count}/{len(files)} files.")
+        print("\n[INGEST] Ingestion Complete")
+        print(
+            f"[INGEST] Successfully processed {doc_success_count}/"
+            f"{len(raw_documents)} files."
+        )
         print(f"[INGEST] Indexed a total of {total_chunks_indexed} chunks into Infinity Vector DB.")
 
 # Singleton manager instance

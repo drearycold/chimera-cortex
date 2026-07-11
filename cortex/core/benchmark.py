@@ -6,16 +6,14 @@ background execution manager, and metric aggregation.
 """
 
 import json
-import os
 import re
 import time
 import threading
 import queue
 import httpx
 
-from .config import DEFAULT_OLLAMA_HOST, DEFAULT_JUDGE_MODEL
 from .database import (
-    save_benchmark_run, update_benchmark_run_status, save_benchmark_result
+    save_benchmark_result, update_benchmark_run_status
 )
 
 # ---------------------------------------------------------------------------
@@ -67,19 +65,30 @@ RETRIEVED CONTEXTS:
 # ---------------------------------------------------------------------------
 # Pipeline Helpers
 # ---------------------------------------------------------------------------
-def flush_cache_via_api(api_url: str, timeout: float = 5.0):
+def flush_cache_via_api(
+    api_url: str,
+    kb_slug: str | None = None,
+    timeout: float = 5.0,
+):
     """Flush the RAG cache by calling POST /api/cache/clear on the live API."""
     try:
-        resp = httpx.post(f"{api_url}/api/cache/clear", timeout=timeout)
+        path = f"/api/kb/{kb_slug}/cache/clear" if kb_slug else "/api/cache/clear"
+        resp = httpx.post(f"{api_url}{path}", timeout=timeout)
         resp.raise_for_status()
-        print(f"[INFO] Cache cleared via API.")
+        print("[INFO] Cache cleared via API.")
     except Exception as e:
         print(f"[WARN] Failed to clear cache via API: {e}")
 
-def query_rag(api_url: str, question: str, timeout: float = 60.0) -> dict:
+def query_rag(
+    api_url: str,
+    question: str,
+    kb_slug: str | None = None,
+    timeout: float = 60.0,
+) -> dict:
     """Send a question to the RAG /api/chat endpoint."""
+    path = f"/api/kb/{kb_slug}/chat" if kb_slug else "/api/chat"
     resp = httpx.post(
-        f"{api_url}/api/chat",
+        f"{api_url}{path}",
         json={"query": question},
         timeout=timeout,
     )
@@ -178,8 +187,18 @@ class BenchmarkManager:
         self.active_run_id = None
         self.thread = None
 
-    def start(self, run_id, dataset_path, judge_model, api_url, ollama_host,
-              reuse_cache=False, delay=1.0, timeout=90.0):
+    def start(
+        self,
+        run_id,
+        dataset_path,
+        judge_model,
+        api_url,
+        ollama_host,
+        kb_slug=None,
+        reuse_cache=False,
+        delay=1.0,
+        timeout=90.0,
+    ):
         """Start benchmark asynchronously in a background thread."""
         with self.lock:
             if self.active_run_id is not None:
@@ -190,10 +209,11 @@ class BenchmarkManager:
         self.thread = threading.Thread(
             target=self._run_wrapper,
             args=(run_id, dataset_path, judge_model, api_url, ollama_host,
-                  reuse_cache, delay, timeout)
+                  kb_slug, reuse_cache, delay, timeout)
         )
         self.thread.daemon = True
         self.thread.start()
+        self.kb_slug = kb_slug
         
     def stop(self):
         """Signal the current run to cancel gracefully."""
@@ -209,7 +229,8 @@ class BenchmarkManager:
             if self.active_run_id is not None:
                 return {
                     "status": "running",
-                    "run_id": self.active_run_id
+                    "run_id": self.active_run_id,
+                    "kb_slug": getattr(self, "kb_slug", None),
                 }
             return {
                 "status": "idle",
@@ -223,11 +244,11 @@ class BenchmarkManager:
             self.thread = None
 
     def _run_wrapper(self, run_id, dataset_path, judge_model, api_url,
-                     ollama_host, reuse_cache, delay, timeout):
+                     ollama_host, kb_slug, reuse_cache, delay, timeout):
         try:
             run_benchmark_internal(
                 self, run_id, dataset_path, judge_model, api_url,
-                ollama_host, reuse_cache, delay, timeout
+                ollama_host, kb_slug, reuse_cache, delay, timeout
             )
         except Exception as e:
             print(f"[ERROR] Benchmark background thread crashed: {e}")
@@ -244,7 +265,7 @@ manager = BenchmarkManager()
 # ---------------------------------------------------------------------------
 # Internal Core Runner (Checks for Cancellation)
 # ---------------------------------------------------------------------------
-def _rag_producer(mgr, dataset, api_url, timeout, q_out, delay):
+def _rag_producer(mgr, dataset, api_url, kb_slug, timeout, q_out, delay):
     """Worker function for the RAG generation phase (Producer)."""
     for idx, qa in enumerate(dataset, 1):
         if mgr.cancel_event.is_set():
@@ -254,7 +275,12 @@ def _rag_producer(mgr, dataset, api_url, timeout, q_out, delay):
         print(f"[RUNNER-RAG] [{idx}/{len(dataset)}] Querying RAG for {qid}...")
         
         try:
-            rag_resp = query_rag(api_url, question, timeout=timeout)
+            rag_resp = query_rag(
+                api_url,
+                question,
+                kb_slug=kb_slug,
+                timeout=timeout,
+            )
             rag_answer = rag_resp.get("answer", "")
             contexts = rag_resp.get("contexts", [])
             cache_hit = rag_resp.get("cache_hit", False)
@@ -356,6 +382,7 @@ def run_benchmark_internal(
     judge_model: str,
     api_url: str,
     ollama_host: str,
+    kb_slug: str | None,
     reuse_cache: bool,
     delay: float,
     timeout: float
@@ -370,17 +397,17 @@ def run_benchmark_internal(
     # 2. Flush Redis cache unless reuse_cache is requested
     if not reuse_cache:
         print("[RUNNER] Flushing generation cache via API...")
-        flush_cache_via_api(api_url)
+        flush_cache_via_api(api_url, kb_slug=kb_slug)
         
     # 3. Main execution pipeline
-    q = queue.Queue(maxsize=4)
-    results_list = []
+    q: queue.Queue = queue.Queue(maxsize=4)
+    results_list: list[dict] = []
     start_time = time.time()
     
     # Start threads
     prod_thread = threading.Thread(
         target=_rag_producer,
-        args=(mgr, dataset, api_url, timeout, q, delay)
+        args=(mgr, dataset, api_url, kb_slug, timeout, q, delay)
     )
     prod_thread.daemon = True
     

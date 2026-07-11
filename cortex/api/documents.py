@@ -1,10 +1,152 @@
+import json
 import os
 import httpx
 from fastapi import APIRouter, HTTPException
 from cortex.core.config import INFINITY_API_URL
-from cortex.core.database import get_mysql_connection, get_minio_client, get_redis_client
+from cortex.core.database import (
+    get_knowledge_base,
+    get_minio_client,
+    get_mysql_connection,
+    get_redis_client,
+)
 
 router = APIRouter(prefix="/api", tags=["Documents"])
+
+
+def _get_kb_document(slug: str, document_id: int) -> tuple[dict, dict]:
+    knowledge_base = get_knowledge_base(slug)
+    if knowledge_base is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Knowledge base '{slug}' not found.",
+        )
+
+    conn = get_mysql_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("""
+            SELECT d.* FROM documents d
+            JOIN sources s ON d.source_id = s.id
+            WHERE d.id = %s AND s.kb_id = %s
+        """, (document_id, knowledge_base["id"]))
+        document = cursor.fetchone()
+    finally:
+        cursor.close()
+        conn.close()
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Document {document_id} not found in knowledge base '{slug}'.",
+        )
+    for field in ("created_at", "updated_at", "indexed_at", "source_modified_at"):
+        value = document.get(field)
+        if value is not None and hasattr(value, "isoformat"):
+            document[field] = value.isoformat()
+    if isinstance(document.get("metadata"), str):
+        document["metadata"] = json.loads(document["metadata"])
+    return knowledge_base, document
+
+
+@router.get("/kb/{slug}/documents")
+def api_kb_documents(slug: str):
+    knowledge_base = get_knowledge_base(slug)
+    if knowledge_base is None:
+        raise HTTPException(status_code=404, detail=f"Knowledge base '{slug}' not found.")
+    conn = get_mysql_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("""
+            SELECT d.id, d.filename, d.title, d.format, d.status,
+                   d.chunk_count, d.size_bytes, d.indexed_at, s.id AS source_id,
+                   s.name AS source_name
+            FROM documents d
+            JOIN sources s ON d.source_id = s.id
+            WHERE s.kb_id = %s
+            ORDER BY d.title ASC
+        """, (knowledge_base["id"],))
+        documents = cursor.fetchall()
+    finally:
+        cursor.close()
+        conn.close()
+    for document in documents:
+        if document.get("indexed_at"):
+            document["indexed_at"] = document["indexed_at"].isoformat()
+    return {"knowledge_base": slug, "documents": documents}
+
+
+@router.get("/kb/{slug}/documents/{document_id}")
+def api_kb_document(slug: str, document_id: int):
+    _, document = _get_kb_document(slug, document_id)
+    return document
+
+
+@router.get("/kb/{slug}/documents/{document_id}/content")
+def api_kb_document_content(slug: str, document_id: int):
+    knowledge_base, document = _get_kb_document(slug, document_id)
+    try:
+        minio_client = get_minio_client()
+        response = minio_client.get_object(
+            knowledge_base["minio_bucket"],
+            document["minio_key"],
+        )
+        content = response.read().decode("utf-8")
+        response.close()
+        response.release_conn()
+        return {
+            "id": document_id,
+            "filename": document["filename"],
+            "content": content,
+        }
+    except Exception as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Document content is unavailable: {exc}",
+        ) from exc
+
+
+@router.delete("/kb/{slug}/documents/{document_id}")
+def api_delete_kb_document(slug: str, document_id: int):
+    knowledge_base, document = _get_kb_document(slug, document_id)
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    try:
+        response = httpx.request(
+            "DELETE",
+            f"{INFINITY_API_URL}/databases/default_db/tables/"
+            f"{knowledge_base['vector_table']}/docs",
+            json={"filter": f"document_id = {document_id}"},
+            headers=headers,
+            timeout=10.0,
+        )
+        response.raise_for_status()
+        if response.json().get("error_code", 0) != 0:
+            raise RuntimeError(response.json().get("error_msg", "Infinity delete failed"))
+        get_minio_client().remove_object(
+            knowledge_base["minio_bucket"],
+            document["minio_key"],
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Storage cleanup failed; metadata was preserved: {exc}",
+        ) from exc
+
+    conn = get_mysql_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM documents WHERE id = %s", (document_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
+        conn.close()
+
+    redis_client = get_redis_client()
+    keys = list(redis_client.scan_iter(f"rag_cache:{slug}:*"))
+    if keys:
+        redis_client.delete(*keys)
+    return {"message": f"Document {document_id} deleted from '{slug}'."}
 
 @router.get("/documents")
 async def api_documents():

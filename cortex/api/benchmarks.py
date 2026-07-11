@@ -1,6 +1,6 @@
 import os
 import json
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from cortex.core.config import DEFAULT_DATASET, DEFAULT_OLLAMA_HOST
 from cortex.core.database import (
@@ -8,6 +8,7 @@ from cortex.core.database import (
     get_benchmark_run, delete_benchmark_run
 )
 from cortex.core.benchmark import manager as benchmark_manager
+from cortex.core.kb_config import DEFAULT_KB_SLUG
 
 router = APIRouter(prefix="/api", tags=["Benchmarks"])
 
@@ -15,7 +16,8 @@ class BenchmarkRunRequest(BaseModel):
     dataset: str = "benchmark_dataset.json"
     judge_model: str = "qwen3.5:9b"
     reuse_cache: bool = False
-    comment: str = None
+    comment: str | None = None
+    kb_slug: str = DEFAULT_KB_SLUG
 
 @router.get("/benchmarks")
 async def api_get_benchmarks():
@@ -42,7 +44,7 @@ async def api_get_benchmark(run_id: int):
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @router.post("/benchmarks/run")
-async def api_run_benchmark(req: BenchmarkRunRequest):
+async def api_run_benchmark(req: BenchmarkRunRequest, request: Request):
     # Check if a benchmark is already running
     status = benchmark_manager.get_status()
     if status["status"] == "running":
@@ -67,7 +69,13 @@ async def api_run_benchmark(req: BenchmarkRunRequest):
     
     # Save a run entry as 'running'
     try:
-        run_id = save_benchmark_run(dataset_name, req.judge_model, total_q, req.comment)
+        run_id = save_benchmark_run(
+            dataset_name,
+            req.judge_model,
+            total_q,
+            req.comment,
+            kb_slug=req.kb_slug,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save benchmark run to DB: {str(e)}")
         
@@ -79,8 +87,9 @@ async def api_run_benchmark(req: BenchmarkRunRequest):
             run_id=run_id,
             dataset_path=dataset_path,
             judge_model=req.judge_model,
-            api_url="http://127.0.0.1:8000",
+            api_url=str(request.base_url).rstrip("/"),
             ollama_host=ollama_host,
+            kb_slug=req.kb_slug,
             reuse_cache=req.reuse_cache,
             delay=1.0,
             timeout=420.0
