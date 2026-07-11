@@ -5,10 +5,17 @@ from unittest.mock import Mock, patch
 
 import httpx
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from app import app
 from cortex.api.external_documents import ExternalDocument
-from cortex.api.chat import build_chat_cache_key, build_search_payload
+from cortex.api.chat import (
+    ChatRequest,
+    ChatResponse,
+    build_chat_cache_key,
+    build_search_payload,
+)
 from cortex.api.sources import _validate_source_config
 from cortex.core.connectors import CalibreConnector
 from cortex.core.external_documents import build_segment_chunks
@@ -18,9 +25,34 @@ from cortex.core.rag import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
+client = TestClient(app)
 
 
 class PhaseThreeReaderContractTests(unittest.TestCase):
+    def test_reader_contract_fixtures_validate(self):
+        reader_fixtures = FIXTURES / "reader_contract"
+        capped = json.loads((reader_fixtures / "chat_capped_request.json").read_text())
+        empty = json.loads((reader_fixtures / "chat_empty_scope_request.json").read_text())
+        response = json.loads((reader_fixtures / "chat_response.json").read_text())
+
+        self.assertEqual(126, ChatRequest.model_validate(capped).retrieval_filter.documents[0].max_ordinal)
+        self.assertEqual([], ChatRequest.model_validate(empty).retrieval_filter.documents)
+        self.assertEqual(
+            "opaque-book-a",
+            ChatResponse.model_validate(response).citations[0].external_id,
+        )
+
+    def test_versioned_reader_contract_publishes_json_schemas(self):
+        response = client.get("/api/contracts/reader-qa/v1")
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertEqual("1", payload["version"])
+        self.assertEqual(
+            {"chat_request", "chat_response", "external_document"},
+            set(payload["schemas"]),
+        )
+
     def test_calibre_connector_uses_content_server_routes(self):
         search = (FIXTURES / "calibre_content_server/search.json").read_bytes()
         books = (FIXTURES / "calibre_content_server/books.json").read_bytes()
@@ -132,6 +164,16 @@ class PhaseThreeReaderContractTests(unittest.TestCase):
         self.assertIn("external_id = 'opaque-b'", expression)
         self.assertIn("source_key IN ('opaque-library')", expression)
         self.assertIn(" OR ", expression)
+
+    def test_explicit_empty_scope_fails_closed(self):
+        self.assertIsNone(build_retrieval_filter_expression(None))
+        expression = build_retrieval_filter_expression(
+            {"documents": [], "source_keys": []}
+        )
+
+        self.assertEqual("(document_id = -1)", expression)
+        payload = build_search_payload("question", [0.1, 0.2], expression)
+        self.assertEqual(expression, payload["filter"])
 
     def test_hybrid_search_and_cache_identity_include_scope(self):
         expression = "(external_id = 'opaque-a' AND segment_ordinal <= 126)"

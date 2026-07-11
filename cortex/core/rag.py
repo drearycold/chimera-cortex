@@ -351,7 +351,7 @@ def _quote_filter_value(value: str) -> str:
 
 def build_retrieval_filter_expression(retrieval_filter: dict | None) -> str | None:
     """Compile opaque document/source constraints into an Infinity row filter."""
-    if not retrieval_filter:
+    if retrieval_filter is None:
         return None
     clauses = []
     for document in retrieval_filter.get("documents", []):
@@ -367,7 +367,7 @@ def build_retrieval_filter_expression(retrieval_filter: dict | None) -> str | No
         values = ", ".join(_quote_filter_value(value) for value in source_keys)
         clauses.append(f"source_key IN ({values})")
     if not clauses:
-        return None
+        return "(document_id = -1)"
     return "(" + " OR ".join(clauses) + ")"
 
 def fetch_and_merge_chunk_range(

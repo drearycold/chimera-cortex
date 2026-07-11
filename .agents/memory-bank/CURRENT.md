@@ -2,7 +2,7 @@
 
 ## Snapshot
 
-- Updated at: 2026-07-11T01:29:42Z
+- Updated at: 2026-07-11T01:38:43Z
 - Repository root: `.` (`chimera-cortex`)
 - Branch: `main`
 - HEAD: `121f5a8` (`docs: handoff docs`)
@@ -27,6 +27,7 @@ Implement the approved five-phase multi-database knowledge platform in `PLAN.md`
 - Phase 3 is active under the latest dual-boundary decision: Calibre Content Server handles normal library import; DSReaderHelper handles reader-specific advanced QA semantics. The rejected direct-SQLite prototype was removed before commit.
 - The Calibre connector now paginates `/ajax/search/{library_id}`, fetches `/ajax/books/{library_id}`, downloads `/get/{format}/{book_id}/{library_id}`, supports Basic/Digest credentials via `password_env`, and normalizes EPUB spine items, PDF pages, and text into ordered segments.
 - Generic external-document PUT/DELETE/batch APIs, opaque source/document IDs, segment ordinal/locator vector fields, retrieval-stage document/source/cap filters, bounded adjacent expansion, cache identity, external contexts, and generic citations are implemented.
+- Reader contract v1 publishes JSON Schemas at `/api/contracts/reader-qa/v1` and is covered by frozen request/response fixtures. An omitted filter remains unrestricted; an explicitly empty filter now matches no documents, preventing empty DSReaderHelper scopes from widening to the whole KB.
 - Live reader-contract validation indexed ordinals 120 and 127. With `max_ordinal: 126`, contexts, first-stage audit, expanded context, prompt, and citation contained only ordinal 120; the uncapped control query returned ordinal 127. External delete and temporary KB/Infinity cleanup passed.
 - Live Calibre validation used the local Content Server at `192.168.11.65:8080`: imported the Quick Start Guide over HTTP as 78 chunks, answered the documented Add Books workflow, skipped all chunks on a second unchanged sync, and removed the temporary KB/vector table successfully.
 - Phase 4 implements Google Drive, OneDrive, and Dropbox connectors with exports/downloads, credential-safe configs, provider cursors, incremental deletions by opaque origin path, and cloud document normalization. Provider-ID filenames and origin-path matching make renames idempotent; move-out changes delete stale Google documents; any import failure aborts cursor persistence for retry. Fixture contracts and two live full/incremental local pipelines pass; no official cloud credentials are configured for provider acceptance.
@@ -45,10 +46,10 @@ Implement the approved five-phase multi-database knowledge platform in `PLAN.md`
 - `venv/bin/bandit -r app.py index.py benchmark.py clean_index.py cortex -ll -q` — PASS (no medium/high findings).
 - `venv/bin/mypy app.py index.py benchmark.py clean_index.py cortex tests` — PASS, 33 source files.
 - `venv/bin/python -m compileall -q app.py index.py benchmark.py clean_index.py cortex tests` — PASS.
-- `PYTHONPATH=. venv/bin/pytest -q` — PASS, 50 tests.
+- `PYTHONPATH=. venv/bin/pytest -q` — PASS, 53 tests.
 - `venv/bin/pip check` — PASS.
 - `git diff --check` — PASS.
-- Live Phase 1/2 API/storage validation, Run 37, Phase 3 cap/Calibre validation, Phase 4 update/query and rename/delete pipelines, and Phase 5 browser/API validation — PASS.
+- Live Phase 1/2 API/storage validation, Run 37, Phase 3 cap/empty-scope/Calibre validation, Phase 4 update/query and rename/delete pipelines, and Phase 5 browser/API validation — PASS.
 
 ## Active Step and Next Action
 

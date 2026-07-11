@@ -11,6 +11,7 @@ from cortex.api.ingest import router as ingest_router
 from cortex.api.kb import router as kb_router
 from cortex.api.sources import router as sources_router
 from cortex.api.external_documents import router as external_documents_router
+from cortex.api.contracts import router as contracts_router
 from cortex.core.scheduler import source_scheduler
 from cortex.core.kb_storage import migrate_existing_vector_tables
 
@@ -43,6 +44,7 @@ app.include_router(ingest_router)
 app.include_router(kb_router)
 app.include_router(sources_router)
 app.include_router(external_documents_router)
+app.include_router(contracts_router)
 
 # Mount static web directory for the UI portal
 static_dir = os.path.join(os.path.dirname(__file__), "static")

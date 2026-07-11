@@ -1,0 +1,9 @@
+{
+  "query": "What evidence is available?",
+  "retrieval_filter": {
+    "documents": [],
+    "source_keys": []
+  },
+  "external_contexts": [],
+  "top_k": 10
+}

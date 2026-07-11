@@ -1,0 +1,29 @@
+{
+  "answer": "The indexed evidence supports the answer.",
+  "contexts": [
+    {
+      "external_id": "opaque-book-a",
+      "source_key": "opaque-library-source",
+      "ordinal": 120,
+      "locator": {"type": "epub_cfi", "value": "epubcfi(/6/2)"},
+      "servant_name": "Book title",
+      "content": "Evidence before the reader position."
+    }
+  ],
+  "citations": [
+    {
+      "external_id": "opaque-book-a",
+      "title": "Book title",
+      "ordinal": 120,
+      "locator": {"type": "epub_cfi", "value": "epubcfi(/6/2)"}
+    }
+  ],
+  "cache_hit": false,
+  "knowledge_base": "dsreader-default",
+  "audit": {
+    "timings_ms": {},
+    "first_stage_candidates": [],
+    "second_stage_candidates": [],
+    "llm_prompt": ""
+  }
+}

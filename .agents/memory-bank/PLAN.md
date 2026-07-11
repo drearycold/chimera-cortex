@@ -4,7 +4,7 @@
 
 - Plan status: APPROVED
 - Approval source: User reviewed and iterated on the architecture (2026-06-04)
-- Last updated at: 2026-07-11T01:29:42Z
+- Last updated at: 2026-07-11T01:38:43Z
 - Related objective: Build a multi-database knowledge platform with multi-source ingestion
 - Related acceptance criteria: Inferred — see CURRENT.md
 
@@ -82,7 +82,7 @@
 
 **Validation:** Contract fixtures plus focused dense/text/RRF/context-expansion/cache tests and a live push/query/delete smoke test.
 
-**Evidence:** The user supplied the authoritative DSReaderHelper-to-Cortex contract, then clarified that Chimera should also support direct import through the standard Calibre Content Server API. The direct-SQLite prototype was removed. Content Server connector, external-document APIs, segment-aware vectors, pre-retrieval filters, bounded expansion, filter-aware cache keys, generic citations, and frozen fixtures are implemented. All 38 tests and static gates pass. Live external cap validation passed. A real Content Server at `192.168.11.65:8080` imported the Calibre Quick Start Guide as 78 chunks, answered how to add books, skipped all chunks on an unchanged second sync, and passed API/Infinity cleanup.
+**Evidence:** The user supplied the authoritative DSReaderHelper-to-Cortex contract, then clarified that Chimera should also support direct import through the standard Calibre Content Server API. The direct-SQLite prototype was removed. Content Server connector, external-document APIs, segment-aware vectors, pre-retrieval filters, bounded expansion, filter-aware cache keys, generic citations, and frozen fixtures are implemented. Explicit empty retrieval scopes fail closed while omitted filters remain unrestricted. Versioned request/response/external-document JSON Schemas are published at `/api/contracts/reader-qa/v1`. Live external cap and empty-scope validation passed. A real Content Server at `192.168.11.65:8080` imported the Calibre Quick Start Guide as 78 chunks, answered how to add books, skipped all chunks on an unchanged second sync, and passed API/Infinity cleanup.
 
 ---
 

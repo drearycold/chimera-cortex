@@ -62,6 +62,22 @@ class RetrievalFilter(BaseModel):
         return source_keys
 
 
+class Citation(BaseModel):
+    external_id: str
+    title: str
+    ordinal: int | None = None
+    locator: dict[str, Any] | None = None
+
+
+class ChatResponse(BaseModel):
+    answer: str
+    contexts: list[dict[str, Any]]
+    citations: list[Citation]
+    cache_hit: bool
+    knowledge_base: str | None
+    audit: dict[str, Any]
+
+
 def build_search_payload(
     query: str,
     query_vector: list[float],
@@ -143,7 +159,7 @@ def build_generation_payload(
         },
     }
 
-@router.post("/chat")
+@router.post("/chat", response_model=ChatResponse)
 def api_chat(req: ChatRequest):
     try:
         default_kb = get_knowledge_base(DEFAULT_KB_SLUG)
@@ -152,7 +168,7 @@ def api_chat(req: ChatRequest):
     return _run_chat(req, default_kb)
 
 
-@router.post("/kb/{slug}/chat")
+@router.post("/kb/{slug}/chat", response_model=ChatResponse)
 def api_kb_chat(slug: str, req: ChatRequest):
     try:
         knowledge_base = get_knowledge_base(slug)

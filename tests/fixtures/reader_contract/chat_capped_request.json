@@ -1,0 +1,14 @@
+{
+  "query": "Why did the character change sides?",
+  "retrieval_filter": {
+    "documents": [
+      {"external_id": "opaque-book-a", "max_ordinal": 126},
+      {"external_id": "opaque-book-b"}
+    ],
+    "source_keys": []
+  },
+  "external_contexts": [
+    {"source": "dictionary", "text": "A structured dictionary result."}
+  ],
+  "top_k": 10
+}

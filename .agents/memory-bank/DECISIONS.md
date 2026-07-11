@@ -117,6 +117,19 @@
 - Supersedes: N/A
 - Superseded by: N/A
 
+## D-20260711-reader-scope-fail-closed-contract
+
+- Status: ACCEPTED
+- Date: 2026-07-11
+- Decision owner: User plan, implemented by Codex
+- Context: DSReaderHelper resolves reader scope into opaque Cortex constraints. A valid scope can resolve to zero allowed documents, while callers may also intentionally omit filtering for ordinary KB chat.
+- Decision: Distinguish an omitted `retrieval_filter` from an explicitly empty filter. Omitted means unrestricted KB retrieval; explicit empty matches no indexed documents. Publish versioned Pydantic-derived JSON Schemas and keep frozen Cortex-owned fixtures.
+- Rationale: Empty allowed sets must not widen into all-ingested retrieval, which would violate scope and spoiler guarantees. Versioned schemas make the repository boundary independently testable.
+- Consequences: DSReaderHelper can safely send an empty resolved set. Contract consumers can discover request/response/external-document schemas at `/api/contracts/reader-qa/v1`; no Calibre-specific scope fields enter Cortex.
+- Evidence: Unit fixtures and live empty-versus-omitted scope comparison on `fgo-lore`.
+- Supersedes: N/A
+- Superseded by: N/A
+
 ## D-20260602-0323-overlap-merge-guardrail
 
 - Status: ACCEPTED

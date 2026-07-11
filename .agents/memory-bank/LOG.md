@@ -166,3 +166,12 @@
 - Google Drive, OneDrive, and Dropbox now fail the sync batch when an eligible file cannot be downloaded or normalized, preventing the provider cursor from advancing past an unprocessed file.
 - Live rename/delete validation used actual MySQL, MinIO, Infinity, and Ollama: the provider file retained document ID 419, updated its title in place, kept exactly one MinIO object, then deleted both metadata and object when moved out. Temporary KB and Infinity cleanup passed.
 - Validation: 50 pytest tests, Ruff, Bandit, MyPy, Node syntax, and diff checks pass. Official-provider credentials remain the only Phase 4 acceptance gap.
+
+## 2026-07-11T01:38:43Z — Reader QA scope contract revision
+
+- Reviewed the revised cross-project scope plan. Confirmed that current chapter/book/series/related/annotation semantics, trusted Calibre metadata resolution, and spoiler warnings remain DSReaderHelper/YABR responsibilities; Cortex stays generic and opaque.
+- Fixed a fail-open edge case: a present but empty `retrieval_filter` previously compiled to no filter and could retrieve the whole KB. It now compiles to a no-match expression; only an omitted filter means unrestricted retrieval.
+- Added explicit `ChatResponse` and citation models, attached them to both chat routes, and published versioned chat request/response/external-document JSON Schemas at `/api/contracts/reader-qa/v1`.
+- Added frozen capped request, empty-scope request, and response fixtures. The repository's FastAPI TestClient serves as the contract mock surface without depending on DSReaderHelper source.
+- Live comparison passed: explicit empty scope returned zero contexts, zero first-stage candidates, and zero citations; the same unrestricted query returned three contexts from the FGO KB. Contract v1 returned all three schemas.
+- Validation: 53 pytest tests, Ruff, Bandit, MyPy, Node syntax, pip check, and diff checks pass.
