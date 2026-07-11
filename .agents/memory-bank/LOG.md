@@ -175,3 +175,12 @@
 - Added frozen capped request, empty-scope request, and response fixtures. The repository's FastAPI TestClient serves as the contract mock surface without depending on DSReaderHelper source.
 - Live comparison passed: explicit empty scope returned zero contexts, zero first-stage candidates, and zero citations; the same unrestricted query returned three contexts from the FGO KB. Contract v1 returned all three schemas.
 - Validation: 53 pytest tests, Ruff, Bandit, MyPy, Node syntax, pip check, and diff checks pass.
+
+## 2026-07-11T13:30:00Z — Google Drive official acceptance complete
+
+- Added a Google Desktop OAuth CLI, environment-referenced authorized-user token files, automatic access-token refresh, atomic token persistence, and owner-only `0600` permissions. Existing service-account and access-token modes remain compatible.
+- Authorized a real Desktop OAuth client with read-only Drive scope. The token file remained outside the repository and a direct Drive API call returned the authenticated user's root folder successfully.
+- Official provider acceptance created a temporary KB and Google Drive source through public APIs, synced two native Google Docs into 42 chunks, and returned the grounded answer that Robert Weaver edited *Canadian Short Stories, Third Series* in 1978.
+- Cleanup evidence: temporary KB deletion returned 200 and a follow-up GET returned 404.
+- Validation at 2026-07-11T13:30:00Z: `PYTHONPATH=. venv/bin/pytest -q` PASS (61 tests); Ruff, MyPy (42 source files), Bandit medium/high, pip check, Node syntax, and diff check PASS.
+- Plan status: Step 4 moved to `COMPLETED`; all five approved phases are complete. No blockers remain.

@@ -2,16 +2,16 @@
 
 ## Snapshot
 
-- Updated at: 2026-07-11T01:38:43Z
+- Updated at: 2026-07-11T13:30:00Z
 - Repository root: `.` (`chimera-cortex`)
 - Branch: `main`
-- HEAD: `121f5a8` (`docs: handoff docs`)
-- Working tree: Phase 1-5 implementation and memory-bank changes are uncommitted
+- HEAD: `610627c` (`fix: harden source synchronization`)
+- Working tree: Google Drive Desktop OAuth implementation, documentation, tests, and memory-bank updates are uncommitted
 - Memory status: `VERIFIED_WITH_DRIFT`
 
 ## Objective and Acceptance Criteria
 
-Implement the approved five-phase multi-database knowledge platform in `PLAN.md`. Phases 1-3 and Phase 5 are complete. Phase 4 product code and live local-pipeline validation are complete; official-provider acceptance awaits cloud credentials.
+Implement the approved five-phase multi-database knowledge platform in `PLAN.md`. All five phases and official-provider acceptance are complete.
 
 ## Verified Progress
 
@@ -30,7 +30,8 @@ Implement the approved five-phase multi-database knowledge platform in `PLAN.md`
 - Reader contract v1 publishes JSON Schemas at `/api/contracts/reader-qa/v1` and is covered by frozen request/response fixtures. An omitted filter remains unrestricted; an explicitly empty filter now matches no documents, preventing empty DSReaderHelper scopes from widening to the whole KB.
 - Live reader-contract validation indexed ordinals 120 and 127. With `max_ordinal: 126`, contexts, first-stage audit, expanded context, prompt, and citation contained only ordinal 120; the uncapped control query returned ordinal 127. External delete and temporary KB/Infinity cleanup passed.
 - Live Calibre validation used the local Content Server at `192.168.11.65:8080`: imported the Quick Start Guide over HTTP as 78 chunks, answered the documented Add Books workflow, skipped all chunks on a second unchanged sync, and removed the temporary KB/vector table successfully.
-- Phase 4 implements Google Drive, OneDrive, and Dropbox connectors with exports/downloads, credential-safe configs, provider cursors, incremental deletions by opaque origin path, and cloud document normalization. Provider-ID filenames and origin-path matching make renames idempotent; move-out changes delete stale Google documents; any import failure aborts cursor persistence for retry. Fixture contracts and two live full/incremental local pipelines pass; no official cloud credentials are configured for provider acceptance.
+- Phase 4 is complete. Google Drive, OneDrive, and Dropbox connectors support exports/downloads, credential-safe configs, provider cursors, incremental deletions by opaque origin path, and cloud document normalization. Google Drive Desktop OAuth now stores refreshable authorized-user credentials outside the repository, refreshes expired access tokens, and atomically persists them with `0600` permissions.
+- Official Google Drive acceptance used a real OAuth user and a two-document Drive folder. The public source API indexed both native Google Docs as 42 chunks, and KB chat correctly answered that Robert Weaver edited *Canadian Short Stories, Third Series* in 1978. The temporary KB returned 404 after cleanup.
 - Phase 5 is complete. The operational UI manages KBs, sources, documents, activity, cache, and config; Chat is KB-scoped. Desktop and mobile browser QA pass, including a real query and source document view.
 - Legacy Infinity tables are migrated at startup through the REST columns API. The real `chunks_fgo_lore` table moved from five to nine columns, resolving an Infinity 500 caused by requesting reader-contract columns from the old schema.
 
@@ -46,15 +47,15 @@ Implement the approved five-phase multi-database knowledge platform in `PLAN.md`
 - `venv/bin/bandit -r app.py index.py benchmark.py clean_index.py cortex -ll -q` — PASS (no medium/high findings).
 - `venv/bin/mypy app.py index.py benchmark.py clean_index.py cortex tests` — PASS, 33 source files.
 - `venv/bin/python -m compileall -q app.py index.py benchmark.py clean_index.py cortex tests` — PASS.
-- `PYTHONPATH=. venv/bin/pytest -q` — PASS, 53 tests.
+- `PYTHONPATH=. venv/bin/pytest -q` — PASS, 61 tests.
 - `venv/bin/pip check` — PASS.
 - `git diff --check` — PASS.
 - Live Phase 1/2 API/storage validation, Run 37, Phase 3 cap/empty-scope/Calibre validation, Phase 4 update/query and rename/delete pipelines, and Phase 5 browser/API validation — PASS.
 
 ## Active Step and Next Action
 
-`PLAN.md` Step 4 remains `IN_PROGRESS` only for official-provider acceptance. Configure one Google Drive OAuth token or service-account JSON through an environment variable, then run a real folder sync/query. Step 5 is `COMPLETED`.
+All approved plan steps are `COMPLETED`. The next safe action is to review and commit the uncommitted Google Drive Desktop OAuth changes.
 
 ## Blockers and Uncertainty
 
-- Live Google Drive acceptance requires an OAuth token or service-account credential configured through environment variables. No matching credential is present in `.env`.
+- No known blockers remain. Local OAuth client and token paths are configured only in ignored `.env`; credentials are not tracked.

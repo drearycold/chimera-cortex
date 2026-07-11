@@ -130,6 +130,19 @@
 - Supersedes: N/A
 - Superseded by: N/A
 
+## D-20260711-google-drive-desktop-oauth
+
+- Status: ACCEPTED
+- Date: 2026-07-11
+- Decision owner: User request, implemented by Codex
+- Context: Official Google Drive acceptance required personal Drive authorization. The available credential was an installed-application OAuth client, not a service account or access token.
+- Decision: Support Desktop OAuth through a dedicated local CLI. Store refreshable authorized-user credentials in a caller-selected file outside the repository; source configuration stores only the environment-variable name that points to that file. Refresh expired access tokens at connector startup and atomically rewrite the token file with `0600` permissions.
+- Rationale: Personal Drive access is naturally user-authorized, while keeping secrets out of MySQL, source JSON, tracked files, and command output. Persisted refresh tokens avoid repeated interactive authorization.
+- Consequences: `google-auth-oauthlib` is required for initial authorization. Runtime Drive access remains read-only. Revoked or invalid credentials require rerunning the authorization CLI.
+- Evidence: Real Desktop OAuth authorization, direct Drive API call, automatic-refresh unit tests, and official two-document sync/query/cleanup acceptance.
+- Supersedes: N/A
+- Superseded by: N/A
+
 ## D-20260602-0323-overlap-merge-guardrail
 
 - Status: ACCEPTED

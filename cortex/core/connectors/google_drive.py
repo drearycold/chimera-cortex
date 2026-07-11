@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,37 @@ GOOGLE_EXPORTS = {
     "application/vnd.google-apps.spreadsheet": ("text/csv", ".csv"),
     "application/vnd.google-apps.presentation": ("application/pdf", ".pdf"),
 }
+GOOGLE_DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+
+
+def save_oauth_credentials(credentials: Any, token_file: str | Path) -> None:
+    path = Path(token_file).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(credentials.to_json())
+        os.chmod(temporary_name, 0o600)
+        os.replace(temporary_name, path)
+    except Exception:
+        Path(temporary_name).unlink(missing_ok=True)
+        raise
+
+
+def load_oauth_credentials(token_file: str | Path):
+    from google.auth.transport.requests import Request  # type: ignore[import-untyped]
+    from google.oauth2.credentials import Credentials  # type: ignore[import-untyped]
+
+    path = Path(token_file).expanduser()
+    credentials = Credentials.from_authorized_user_file(path, GOOGLE_DRIVE_SCOPES)
+    if credentials.expired and credentials.refresh_token:
+        credentials.refresh(Request())
+        save_oauth_credentials(credentials, path)
+    if not credentials.valid:
+        raise RuntimeError(
+            "Google OAuth credentials are invalid; run google_auth.py authorize again."
+        )
+    return credentials
 
 
 class GoogleDriveConnector(BaseConnector):
@@ -32,18 +64,21 @@ class GoogleDriveConnector(BaseConnector):
         from google.oauth2 import service_account  # type: ignore[import-untyped]
         from googleapiclient.discovery import build  # type: ignore[import-untyped]
 
-        scopes = ["https://www.googleapis.com/auth/drive.readonly"]
         service_account_env = self.config.get("service_account_env")
         if service_account_env:
             value = os.environ[str(service_account_env)]
             if value.lstrip().startswith("{"):
                 credentials = service_account.Credentials.from_service_account_info(
-                    json.loads(value), scopes=scopes
+                    json.loads(value), scopes=GOOGLE_DRIVE_SCOPES
                 )
             else:
                 credentials = service_account.Credentials.from_service_account_file(
-                    value, scopes=scopes
+                    value, scopes=GOOGLE_DRIVE_SCOPES
                 )
+        elif self.config.get("oauth_token_file_env"):
+            credentials = load_oauth_credentials(
+                os.environ[str(self.config["oauth_token_file_env"])]
+            )
         else:
             credentials = Credentials(token=os.environ[str(self.config["token_env"])])
         return build("drive", "v3", credentials=credentials, cache_discovery=False)

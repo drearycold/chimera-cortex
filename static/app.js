@@ -645,7 +645,7 @@ document.addEventListener("DOMContentLoaded", () => {
             directory: { path: "documents" },
             web: { url: "https://example.com/docs", max_depth: 1, max_pages: 25 },
             calibre: { base_url: "http://192.168.11.65:8080", library_id: "Calibre_Library", preferred_formats: ["EPUB", "PDF"] },
-            cloud_drive: { provider: "google_drive", folder_id: "", service_account_env: "GOOGLE_SERVICE_ACCOUNT_JSON" },
+            cloud_drive: { provider: "google_drive", folder_id: "", oauth_token_file_env: "GOOGLE_OAUTH_TOKEN_FILE" },
             external: { source_key: "dsreaderhelper" },
         };
         return templates[type];

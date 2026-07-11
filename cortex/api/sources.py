@@ -160,10 +160,17 @@ def _validate_source_config(
         if provider == "google_drive":
             if not str(config.get("folder_id", "")).strip():
                 raise HTTPException(status_code=422, detail="Google Drive requires config.folder_id.")
-            if not (config.get("token_env") or config.get("service_account_env")):
+            if not (
+                config.get("token_env")
+                or config.get("service_account_env")
+                or config.get("oauth_token_file_env")
+            ):
                 raise HTTPException(
                     status_code=422,
-                    detail="Google Drive requires config.token_env or config.service_account_env.",
+                    detail=(
+                        "Google Drive requires config.token_env, config.service_account_env, "
+                        "or config.oauth_token_file_env."
+                    ),
                 )
         elif provider == "onedrive":
             if not str(config.get("drive_id", "")).strip() or not str(config.get("folder_id", "")).strip():

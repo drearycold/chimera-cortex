@@ -4,7 +4,7 @@
 
 - Plan status: APPROVED
 - Approval source: User reviewed and iterated on the architecture (2026-06-04)
-- Last updated at: 2026-07-11T01:38:43Z
+- Last updated at: 2026-07-11T13:30:00Z
 - Related objective: Build a multi-database knowledge platform with multi-source ingestion
 - Related acceptance criteria: Inferred — see CURRENT.md
 
@@ -86,7 +86,7 @@
 
 ---
 
-### 4. Cloud Drive Connectors — `IN_PROGRESS`
+### 4. Cloud Drive Connectors — `COMPLETED`
 
 **Objective:** Connect to Google Drive, OneDrive, Dropbox.
 
@@ -102,7 +102,7 @@
 
 **Validation:** Manual — end-to-end sync and query.
 
-**Evidence:** Implemented Google Drive, OneDrive, and Dropbox connectors, provider exports/downloads, credential-by-environment validation, full and incremental cursors, opaque origin-path deletion, and cloud format normalization. Fixture tests cover Google exports/change cursors, move-out deletion, retry-safe download failures, OneDrive delta links, and Dropbox cursors/deletions. Cloud filenames and ingestion identity are provider-ID based, so renames do not duplicate documents or objects. Live pipelines against actual MySQL, MinIO, Infinity, Ollama, and reranker proved initial/incremental updates, persisted cursors, grounded query, rename-in-place, opaque deletion, and cleanup. Official-provider live acceptance remains pending because no cloud credential variables are configured locally.
+**Evidence:** Implemented Google Drive, OneDrive, and Dropbox connectors, provider exports/downloads, credential-by-environment validation, full and incremental cursors, opaque origin-path deletion, and cloud format normalization. Fixture tests cover Google exports/change cursors, move-out deletion, retry-safe download failures, OneDrive delta links, Dropbox cursors/deletions, and refreshable Google Desktop OAuth credentials. Cloud filenames and ingestion identity are provider-ID based, so renames do not duplicate documents or objects. Live pipelines against actual MySQL, MinIO, Infinity, Ollama, and reranker proved initial/incremental updates, persisted cursors, grounded query, rename-in-place, opaque deletion, and cleanup. Official Google Drive acceptance synced two native Google Docs through the public source API, indexed 42 chunks, returned a grounded answer identifying Robert Weaver and 1978, and removed the temporary KB successfully.
 
 ---
 

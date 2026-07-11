@@ -1,7 +1,12 @@
 import unittest
+import os
+import stat
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
+from unittest.mock import patch
 
 import httpx
 from fastapi import HTTPException
@@ -13,10 +18,60 @@ from cortex.core.connectors import (
     OneDriveConnector,
 )
 from cortex.core.connectors.cloud_common import stable_cloud_filename
+from cortex.core.connectors.google_drive import load_oauth_credentials, save_oauth_credentials
 from cortex.core.ingest import document_identity
 
 
 class PhaseFourCloudDriveTests(unittest.TestCase):
+    def test_google_oauth_token_is_saved_with_private_permissions(self):
+        credentials = Mock()
+        credentials.to_json.return_value = '{"refresh_token":"private"}'
+        with tempfile.TemporaryDirectory() as directory:
+            token_file = Path(directory) / "google-token.json"
+
+            save_oauth_credentials(credentials, token_file)
+
+            self.assertEqual('{"refresh_token":"private"}', token_file.read_text())
+            self.assertEqual(0o600, stat.S_IMODE(token_file.stat().st_mode))
+
+    @patch("google.oauth2.credentials.Credentials.from_authorized_user_file")
+    @patch("google.auth.transport.requests.Request")
+    def test_google_oauth_expired_token_refreshes_and_is_persisted(
+        self, request_class, load_credentials
+    ):
+        credentials = Mock(expired=True, refresh_token="refresh", valid=True)
+        credentials.to_json.return_value = '{"token":"renewed"}'
+        load_credentials.return_value = credentials
+        with tempfile.TemporaryDirectory() as directory:
+            token_file = Path(directory) / "google-token.json"
+            token_file.write_text("{}")
+
+            result = load_oauth_credentials(token_file)
+
+            self.assertIs(credentials, result)
+            credentials.refresh.assert_called_once_with(request_class.return_value)
+            self.assertEqual('{"token":"renewed"}', token_file.read_text())
+
+    @patch("cortex.core.connectors.google_drive.load_oauth_credentials")
+    @patch("googleapiclient.discovery.build")
+    def test_google_drive_builds_service_from_oauth_token_file(
+        self, build, load_credentials
+    ):
+        with patch.dict(os.environ, {"GOOGLE_OAUTH_TOKEN_FILE": "/private/token.json"}):
+            GoogleDriveConnector(
+                1,
+                2,
+                {
+                    "folder_id": "folder",
+                    "oauth_token_file_env": "GOOGLE_OAUTH_TOKEN_FILE",
+                },
+            )
+
+        load_credentials.assert_called_once_with("/private/token.json")
+        build.assert_called_once_with(
+            "drive", "v3", credentials=load_credentials.return_value, cache_discovery=False
+        )
+
     def test_cloud_filename_is_stable_across_provider_rename(self):
         before = stable_cloud_filename("provider-file-1", "Old Name.md")
         after = stable_cloud_filename("provider-file-1", "Renamed Note.md")
@@ -270,6 +325,16 @@ class PhaseFourCloudDriveTests(unittest.TestCase):
                 "manual",
                 None,
             )
+        _validate_source_config(
+            "cloud_drive",
+            {
+                "provider": "google_drive",
+                "folder_id": "folder",
+                "oauth_token_file_env": "GOOGLE_OAUTH_TOKEN_FILE",
+            },
+            "manual",
+            None,
+        )
         _validate_source_config(
             "cloud_drive",
             {
