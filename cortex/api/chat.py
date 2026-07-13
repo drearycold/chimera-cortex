@@ -3,6 +3,7 @@ import json
 import hashlib
 import logging
 import re
+from datetime import datetime, timezone
 import httpx
 from typing import Any
 from fastapi import APIRouter, HTTPException
@@ -712,7 +713,14 @@ def _run_chat(req: ChatRequest, knowledge_base: dict | None = None):
     # 6. Save to Cache in Redis
     if r_client:
         try:
-            r_client.setex(cache_key, 3600, json.dumps(response_data))
+            cache_payload = {
+                **response_data,
+                "_cache_meta": {
+                    "query": req.query,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+            }
+            r_client.setex(cache_key, 3600, json.dumps(cache_payload))
         except Exception:
             pass
 

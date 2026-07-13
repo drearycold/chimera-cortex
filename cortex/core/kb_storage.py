@@ -6,9 +6,9 @@ from .config import INFINITY_API_URL
 from .database import (
     get_minio_client,
     get_mysql_connection,
-    get_redis_client,
     list_knowledge_bases,
 )
+from .cache_management import clear_knowledge_base_cache
 
 
 def _validate_vector_table(table_name: str):
@@ -159,14 +159,6 @@ def ensure_minio_bucket(knowledge_base: dict):
     bucket = knowledge_base["minio_bucket"]
     if not client.bucket_exists(bucket):
         client.make_bucket(bucket)
-
-
-def clear_knowledge_base_cache(slug: str) -> int:
-    client = get_redis_client()
-    keys = list(client.scan_iter(f"rag_cache:{slug}:*"))
-    if keys:
-        client.delete(*keys)
-    return len(keys)
 
 
 def delete_knowledge_base_storage(knowledge_base: dict):

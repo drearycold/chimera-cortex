@@ -1,6 +1,6 @@
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from cortex.core.database import (
@@ -13,6 +13,11 @@ from cortex.core.database import (
     update_knowledge_base,
 )
 from cortex.core.kb_config import default_generation_config, default_ingest_config
+from cortex.core.cache_management import (
+    delete_cache_entry,
+    get_cache_entry_detail,
+    get_knowledge_base_cache,
+)
 from cortex.core.kb_storage import (
     clear_knowledge_base_cache,
     delete_knowledge_base_storage,
@@ -150,12 +155,62 @@ def api_clear_knowledge_base_cache(slug: str):
         )
     try:
         cleared = clear_knowledge_base_cache(slug)
-        return {"message": f"Cleared {cleared} cache entries for '{slug}'."}
+        return {
+            "cleared": cleared,
+            "message": f"Cleared {cleared} cache entries for '{slug}'.",
+        }
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Cache clear failed: {exc}",
         ) from exc
+
+
+@router.get("/{slug}/cache")
+def api_list_knowledge_base_cache(
+    slug: str,
+    offset: int = 0,
+    limit: int = 50,
+    q: str | None = Query(default=None, max_length=500),
+):
+    if get_knowledge_base(slug) is None:
+        raise HTTPException(status_code=404, detail=f"Knowledge base '{slug}' not found.")
+    if offset < 0 or not 1 <= limit <= 100:
+        raise HTTPException(status_code=422, detail="offset must be >= 0 and limit must be 1-100.")
+    try:
+        return get_knowledge_base_cache(slug, offset, limit, q)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Cache entries unavailable: {exc}") from exc
+
+
+@router.get("/{slug}/cache/{digest}")
+def api_get_knowledge_base_cache_entry(slug: str, digest: str):
+    if get_knowledge_base(slug) is None:
+        raise HTTPException(status_code=404, detail=f"Knowledge base '{slug}' not found.")
+    try:
+        entry = get_cache_entry_detail(slug, digest)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Cache entry unavailable: {exc}") from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Cache entry has already expired or was deleted.")
+    return entry
+
+
+@router.delete("/{slug}/cache/{digest}")
+def api_delete_knowledge_base_cache_entry(slug: str, digest: str):
+    if get_knowledge_base(slug) is None:
+        raise HTTPException(status_code=404, detail=f"Knowledge base '{slug}' not found.")
+    try:
+        deleted = delete_cache_entry(slug, digest)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Cache deletion failed: {exc}") from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Cache entry has already expired or was deleted.")
+    return {"deleted": 1, "message": "Cache entry deleted."}
 
 
 @router.get("/{slug}/ingestion-logs")

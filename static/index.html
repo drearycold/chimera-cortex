@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chimera Cortex: An Omni-Context Knowledge Engine</title>
-    <link rel="stylesheet" href="style.css?v=20260711-corpus">
+    <link rel="stylesheet" href="style.css?v=20260713-cache">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -357,7 +357,6 @@
                                 <p id="manage-kb-description"></p>
                             </div>
                             <div class="detail-actions">
-                                <button class="icon-button" id="btn-clear-cache" title="Clear cache" aria-label="Clear cache"><i data-lucide="eraser"></i></button>
                                 <button class="icon-button" id="btn-edit-kb" title="Edit knowledge base" aria-label="Edit knowledge base"><i data-lucide="pencil"></i></button>
                                 <button class="icon-button danger" id="btn-delete-kb" title="Delete knowledge base" aria-label="Delete knowledge base"><i data-lucide="trash-2"></i></button>
                             </div>
@@ -367,6 +366,7 @@
                             <button class="active" data-view="sources"><i data-lucide="plug"></i><span>Sources</span></button>
                             <button data-view="documents"><i data-lucide="files"></i><span>Documents</span></button>
                             <button data-view="activity"><i data-lucide="activity"></i><span>Activity</span></button>
+                            <button data-view="cache"><i data-lucide="database-zap"></i><span>Cache</span></button>
                             <button data-view="config"><i data-lucide="braces"></i><span>Config</span></button>
                         </nav>
 
@@ -386,6 +386,37 @@
                         <div class="workspace-view" id="manage-activity-view">
                             <div class="view-toolbar"><div><h3>Ingestion Activity</h3><span>Latest 100 runs</span></div></div>
                             <div class="data-table-wrap"><table class="data-table"><thead><tr><th>Time</th><th>Source</th><th>Action</th><th>Processed</th><th>Duration</th><th>Result</th></tr></thead><tbody id="activity-table-body"></tbody></table></div>
+                        </div>
+
+                        <div class="workspace-view" id="manage-cache-view">
+                            <div class="view-toolbar cache-toolbar">
+                                <div><h3>RAG Cache</h3><span id="cache-count-label">Loading cache...</span></div>
+                                <div class="cache-actions">
+                                    <div class="cache-search">
+                                        <i data-lucide="search" aria-hidden="true"></i>
+                                        <input type="search" id="cache-search" placeholder="Search cached queries" maxlength="500" autocomplete="off">
+                                        <button type="button" id="clear-cache-search" aria-label="Clear cache search" hidden><i data-lucide="x" aria-hidden="true"></i></button>
+                                    </div>
+                                    <button class="icon-button" id="btn-refresh-cache" title="Refresh cache" aria-label="Refresh cache"><i data-lucide="refresh-cw"></i></button>
+                                    <button class="command-button" id="btn-clear-kb-cache"><i data-lucide="eraser"></i><span>Clear this KB</span></button>
+                                    <button class="command-button danger" id="btn-clear-global-cache"><i data-lucide="trash-2"></i><span>Clear all RAG cache</span></button>
+                                </div>
+                            </div>
+                            <div class="cache-metrics" id="cache-metrics">
+                                <div><span>Current KB</span><strong id="cache-kb-entries">—</strong><small id="cache-kb-size">—</small></div>
+                                <div><span>All KBs</span><strong id="cache-global-entries">—</strong><small id="cache-global-size">—</small></div>
+                                <div><span>Average TTL</span><strong id="cache-average-ttl">—</strong><small>remaining</small></div>
+                                <div><span>Expiring soon</span><strong id="cache-expiring-soon">—</strong><small>within 5 minutes</small></div>
+                            </div>
+                            <p class="cache-notice" id="cache-notice" role="status" aria-live="polite"></p>
+                            <div class="data-table-wrap cache-table-wrap"><table class="data-table cache-table"><thead><tr><th>Query</th><th>Size</th><th>Created</th><th>Expires</th><th>TTL</th><th></th></tr></thead><tbody id="cache-table-body"><tr><td colspan="6" class="empty-cell">Loading cache entries...</td></tr></tbody></table></div>
+                            <div class="cache-pagination">
+                                <span id="cache-page-label">0 entries</span>
+                                <div>
+                                    <button class="mini-button" id="btn-cache-prev" title="Previous page" aria-label="Previous cache page"><i data-lucide="chevron-left"></i></button>
+                                    <button class="mini-button" id="btn-cache-next" title="Next page" aria-label="Next cache page"><i data-lucide="chevron-right"></i></button>
+                                </div>
+                            </div>
                         </div>
 
                         <div class="workspace-view" id="manage-config-view">
@@ -429,7 +460,22 @@
         </div>
     </div>
 
+    <div class="cache-drawer-overlay" id="cache-detail-drawer" hidden>
+        <aside class="cache-drawer" role="dialog" aria-modal="true" aria-labelledby="cache-detail-title">
+            <header class="cache-drawer-header">
+                <div>
+                    <span class="section-kicker">Cached response</span>
+                    <h3 id="cache-detail-title">Cache details</h3>
+                </div>
+                <button class="icon-button" id="close-cache-detail" title="Close details" aria-label="Close cache details"><i data-lucide="x"></i></button>
+            </header>
+            <div class="cache-drawer-body" id="cache-detail-body">
+                <p class="loading-item">Loading cache details...</p>
+            </div>
+        </aside>
+    </div>
+
     <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-    <script src="app.js?v=20260711-corpus"></script>
+    <script src="app.js?v=20260713-cache-detail"></script>
 </body>
 </html>

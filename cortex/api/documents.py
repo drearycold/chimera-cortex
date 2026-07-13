@@ -2,6 +2,7 @@ import json
 import os
 import httpx
 from fastapi import APIRouter, HTTPException
+from cortex.core.cache_management import clear_cache
 from cortex.core.config import INFINITY_API_URL
 from cortex.core.database import (
     get_knowledge_base,
@@ -226,13 +227,12 @@ async def api_delete_document(filename: str):
     except Exception as e:
         print(f"[Warning] Failed to delete document from MySQL: {e}")
 
-    # 5. Flush Redis Cache
+    # 5. Clear only Chimera RAG cache keys.
     try:
-        r_client = get_redis_client()
-        r_client.flushdb()
-        print("Redis cache flushed successfully.")
+        cleared = clear_cache()
+        print(f"Cleared {cleared} Redis RAG cache entries.")
     except Exception as e:
-        print(f"[Warning] Redis cache flush failed: {e}")
+        print(f"[Warning] Redis RAG cache clear failed: {e}")
 
     # 6. Delete from local disk if it exists in servant_lore_md_v3 or documents
     local_paths = [

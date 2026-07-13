@@ -82,6 +82,15 @@ document.addEventListener("DOMContentLoaded", () => {
     let managedSources = [];
     let managedDocuments = [];
     let managedLogs = [];
+    let managedCache = null;
+    let globalCacheStats = null;
+    let cacheOffset = 0;
+    const cacheLimit = 50;
+    let cacheQuery = "";
+    let cacheSearchTimer = null;
+    let cacheRequestId = 0;
+    let cacheDetailTrigger = null;
+    let activeManageView = "sources";
     let managementMode = null;
     let historicalRuns = [];
     let selectedRunId = null;
@@ -547,11 +556,17 @@ document.addEventListener("DOMContentLoaded", () => {
             managedSources = sourcesData.sources || [];
             managedDocuments = documentsDataResult.documents || [];
             managedLogs = logsData.logs || [];
+            managedCache = null;
+            cacheOffset = 0;
+            cacheQuery = "";
+            document.getElementById("cache-search").value = "";
+            document.getElementById("clear-cache-search").hidden = true;
             chatKbSelect.value = slug;
             document.getElementById("manage-empty").style.display = "none";
             document.getElementById("manage-detail").style.display = "block";
             renderKnowledgeBaseList();
             renderManagedKnowledgeBase();
+            if (activeManageView === "cache") await fetchManagedCache();
         } catch (error) {
             alert(`Could not load knowledge base: ${error.message}`);
         }
@@ -624,6 +639,122 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td><span class="result-badge ${log.docs_failed || log.error_detail ? "error" : "ok"}">${log.docs_failed || log.error_detail ? "Failed" : "Success"}</span></td>
             </tr>
         `).join("") : emptyRow(6, "No ingestion activity recorded.");
+    }
+
+    function formatBytes(value) {
+        const bytes = Number(value || 0);
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    function formatTtl(value) {
+        if (value === null || value === undefined || value < 0) return "No expiry";
+        const minutes = Math.floor(value / 60);
+        const seconds = value % 60;
+        if (minutes >= 60) return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+        return minutes ? `${minutes}m ${seconds}s` : `${seconds}s`;
+    }
+
+    async function fetchManagedCache() {
+        if (!managedKb) return;
+        const requestId = ++cacheRequestId;
+        const notice = document.getElementById("cache-notice");
+        const body = document.getElementById("cache-table-body");
+        notice.textContent = "";
+        body.innerHTML = emptyRow(6, "Loading cache entries...");
+        try {
+            const queryParam = cacheQuery ? `&q=${encodeURIComponent(cacheQuery)}` : "";
+            const [cacheData, statsData] = await Promise.all([
+                apiRequest(`/api/kb/${managedKb.slug}/cache?offset=${cacheOffset}&limit=${cacheLimit}${queryParam}`),
+                apiRequest("/api/cache/stats"),
+            ]);
+            if (requestId !== cacheRequestId) return;
+            managedCache = cacheData;
+            globalCacheStats = statsData;
+            renderManagedCache();
+        } catch (error) {
+            if (requestId !== cacheRequestId) return;
+            managedCache = null;
+            body.innerHTML = emptyRow(6, "Cache data is unavailable.");
+            notice.textContent = error.message;
+            notice.className = "cache-notice error";
+        }
+    }
+
+    function renderManagedCache() {
+        const summary = managedCache.summary;
+        const entries = managedCache.entries || [];
+        const total = summary.entry_count;
+        const filtered = managedCache.filtered_count;
+        document.getElementById("cache-count-label").textContent = cacheQuery
+            ? `${filtered} matching of ${total}`
+            : `${total} cached response${total === 1 ? "" : "s"}`;
+        document.getElementById("cache-kb-entries").textContent = total.toLocaleString();
+        document.getElementById("cache-kb-size").textContent = formatBytes(summary.size_bytes);
+        document.getElementById("cache-global-entries").textContent = globalCacheStats.entry_count.toLocaleString();
+        document.getElementById("cache-global-size").textContent = formatBytes(globalCacheStats.size_bytes);
+        document.getElementById("cache-average-ttl").textContent = formatTtl(summary.average_ttl_seconds);
+        document.getElementById("cache-expiring-soon").textContent = summary.expiring_soon_count.toLocaleString();
+        const start = filtered ? cacheOffset + 1 : 0;
+        const end = Math.min(cacheOffset + entries.length, filtered);
+        document.getElementById("cache-page-label").textContent = `${start}–${end} of ${filtered}`;
+        document.getElementById("btn-cache-prev").disabled = cacheOffset === 0;
+        document.getElementById("btn-cache-next").disabled = cacheOffset + cacheLimit >= filtered;
+        document.getElementById("cache-notice").className = "cache-notice";
+        document.getElementById("cache-table-body").innerHTML = entries.length ? entries.map(entry => `
+            <tr class="cache-row" tabindex="0" data-cache-entry-digest="${entry.digest}" aria-label="Open cache details for ${escapeHtml(entry.query)}">
+                <td class="cache-query" title="${escapeHtml(entry.query)}">${escapeHtml(entry.query)}</td>
+                <td>${formatBytes(entry.size_bytes)}</td>
+                <td>${formatDate(entry.created_at)}</td>
+                <td>${formatDate(entry.expires_at)}</td>
+                <td>${formatTtl(entry.ttl_seconds)}</td>
+                <td class="table-actions"><button class="mini-button danger" data-cache-delete-digest="${entry.digest}" title="Delete cache entry" aria-label="Delete cache entry"><i data-lucide="trash-2"></i></button></td>
+            </tr>
+        `).join("") : emptyRow(6, cacheQuery ? "No cached queries match this search." : (cacheOffset ? "This cache page expired. Refresh to continue." : "No cached responses for this knowledge base."));
+        refreshIcons();
+    }
+
+    function renderCacheDetail(detail) {
+        const contexts = detail.contexts || [];
+        const citations = detail.citations || [];
+        const timings = Object.entries(detail.timings || {});
+        document.getElementById("cache-detail-title").textContent = detail.query;
+        document.getElementById("cache-detail-body").innerHTML = `
+            <div class="cache-detail-facts">
+                <div><span>TTL</span><strong>${formatTtl(detail.ttl_seconds)}</strong></div>
+                <div><span>Size</span><strong>${formatBytes(detail.size_bytes)}</strong></div>
+                <div><span>Created</span><strong>${formatDate(detail.created_at)}</strong></div>
+                <div><span>Expires</span><strong>${formatDate(detail.expires_at)}</strong></div>
+            </div>
+            <section class="cache-detail-section"><h4>Answer</h4><p>${escapeHtml(detail.answer || "No answer stored.")}</p></section>
+            <section class="cache-detail-section"><h4>Contexts <span>${contexts.length}</span></h4><div class="cache-context-list">${contexts.length ? contexts.map((context, index) => `
+                <article><header><strong>${escapeHtml(context.document_title || context.filename || `Context ${index + 1}`)}</strong>${context.distance !== undefined ? `<span>${Number(context.distance).toFixed(4)}</span>` : ""}</header><p>${escapeHtml(context.content || context.text || "")}</p></article>
+            `).join("") : `<p class="cache-detail-empty">No contexts stored.</p>`}</div></section>
+            <section class="cache-detail-section"><h4>Citations <span>${citations.length}</span></h4><div class="cache-citation-list">${citations.length ? citations.map(citation => `<div><strong>${escapeHtml(citation.title || "Untitled")}</strong><span>${escapeHtml(citation.external_id || "Internal document")}${citation.ordinal !== null && citation.ordinal !== undefined ? ` · #${citation.ordinal}` : ""}</span></div>`).join("") : `<p class="cache-detail-empty">No citations stored.</p>`}</div></section>
+            <section class="cache-detail-section"><h4>Timings</h4><div class="cache-timing-grid">${timings.length ? timings.map(([name, value]) => `<div><span>${escapeHtml(name.replaceAll("_", " "))}</span><strong>${Number(value).toFixed(2)} ms</strong></div>`).join("") : `<p class="cache-detail-empty">No timing data stored.</p>`}</div></section>
+        `;
+    }
+
+    async function openCacheDetail(digest, trigger) {
+        cacheDetailTrigger = trigger;
+        const drawer = document.getElementById("cache-detail-drawer");
+        document.getElementById("cache-detail-title").textContent = "Cache details";
+        document.getElementById("cache-detail-body").innerHTML = `<p class="loading-item">Loading cache details...</p>`;
+        drawer.hidden = false;
+        document.getElementById("close-cache-detail").focus();
+        try {
+            const detail = await apiRequest(`/api/kb/${managedKb.slug}/cache/${digest}`);
+            renderCacheDetail(detail);
+        } catch (error) {
+            document.getElementById("cache-detail-body").innerHTML = `<p class="cache-detail-error">${escapeHtml(error.message)}</p>`;
+        }
+    }
+
+    function closeCacheDetail() {
+        document.getElementById("cache-detail-drawer").hidden = true;
+        cacheDetailTrigger?.focus();
+        cacheDetailTrigger = null;
     }
 
     function formatDate(value) {
@@ -753,8 +884,11 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("workspace-tabs").addEventListener("click", event => {
         const button = event.target.closest("[data-view]");
         if (!button) return;
+        activeManageView = button.dataset.view;
         document.querySelectorAll("#workspace-tabs button").forEach(item => item.classList.toggle("active", item === button));
         document.querySelectorAll(".workspace-view").forEach(view => view.classList.toggle("active", view.id === `manage-${button.dataset.view}-view`));
+        button.scrollIntoView({ block: "nearest", inline: "nearest" });
+        if (activeManageView === "cache") fetchManagedCache();
     });
 
     document.getElementById("sources-table-body").addEventListener("click", async event => {
@@ -786,11 +920,81 @@ document.addEventListener("DOMContentLoaded", () => {
         } catch (error) { alert(error.message); }
     });
 
-    document.getElementById("btn-clear-cache").addEventListener("click", async () => {
+    document.getElementById("btn-refresh-cache").addEventListener("click", fetchManagedCache);
+    document.getElementById("cache-search").addEventListener("input", event => {
+        const value = event.target.value;
+        document.getElementById("clear-cache-search").hidden = value.length === 0;
+        clearTimeout(cacheSearchTimer);
+        document.getElementById("cache-notice").textContent = "Searching...";
+        cacheSearchTimer = setTimeout(() => {
+            cacheQuery = value.trim();
+            cacheOffset = 0;
+            fetchManagedCache();
+        }, 250);
+    });
+    document.getElementById("clear-cache-search").addEventListener("click", () => {
+        clearTimeout(cacheSearchTimer);
+        document.getElementById("cache-search").value = "";
+        document.getElementById("clear-cache-search").hidden = true;
+        cacheQuery = "";
+        cacheOffset = 0;
+        fetchManagedCache();
+        document.getElementById("cache-search").focus();
+    });
+    document.getElementById("btn-clear-kb-cache").addEventListener("click", async () => {
+        if (!confirm(`Clear every cached response for "${managedKb.name}"?`)) return;
         try {
             const result = await apiRequest(`/api/kb/${managedKb.slug}/cache/clear`, { method: "POST" });
-            alert(result.message);
+            cacheOffset = 0;
+            await fetchManagedCache();
+            document.getElementById("cache-notice").textContent = result.message;
         } catch (error) { alert(error.message); }
+    });
+    document.getElementById("btn-clear-global-cache").addEventListener("click", async () => {
+        if (!confirm("Clear all Chimera RAG cache entries across every knowledge base?")) return;
+        try {
+            const result = await apiRequest("/api/cache/clear", { method: "POST" });
+            cacheOffset = 0;
+            await fetchManagedCache();
+            document.getElementById("cache-notice").textContent = result.message;
+        } catch (error) { alert(error.message); }
+    });
+    document.getElementById("cache-table-body").addEventListener("click", async event => {
+        const deleteButton = event.target.closest("[data-cache-delete-digest]");
+        if (!deleteButton) {
+            const row = event.target.closest("[data-cache-entry-digest]");
+            if (row) openCacheDetail(row.dataset.cacheEntryDigest, row);
+            return;
+        }
+        event.stopPropagation();
+        if (!confirm("Delete this cached response?")) return;
+        try {
+            await apiRequest(`/api/kb/${managedKb.slug}/cache/${deleteButton.dataset.cacheDeleteDigest}`, { method: "DELETE" });
+            await fetchManagedCache();
+        } catch (error) {
+            if (error.message.includes("expired")) await fetchManagedCache();
+            else alert(error.message);
+        }
+    });
+    document.getElementById("cache-table-body").addEventListener("keydown", event => {
+        if (!event.target.matches("[data-cache-entry-digest]") || !["Enter", " "].includes(event.key)) return;
+        event.preventDefault();
+        openCacheDetail(event.target.dataset.cacheEntryDigest, event.target);
+    });
+    document.getElementById("close-cache-detail").addEventListener("click", closeCacheDetail);
+    document.getElementById("cache-detail-drawer").addEventListener("click", event => {
+        if (event.target.id === "cache-detail-drawer") closeCacheDetail();
+    });
+    document.addEventListener("keydown", event => {
+        if (event.key === "Escape" && !document.getElementById("cache-detail-drawer").hidden) closeCacheDetail();
+    });
+    document.getElementById("btn-cache-prev").addEventListener("click", () => {
+        cacheOffset = Math.max(0, cacheOffset - cacheLimit);
+        fetchManagedCache();
+    });
+    document.getElementById("btn-cache-next").addEventListener("click", () => {
+        cacheOffset += cacheLimit;
+        fetchManagedCache();
     });
     document.getElementById("btn-delete-kb").addEventListener("click", async () => {
         if (!confirm(`Delete knowledge base "${managedKb.name}" and all of its storage?`)) return;
