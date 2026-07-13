@@ -7,7 +7,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const chatMessages = document.getElementById("chat-messages");
     const servantList = document.getElementById("servant-list");
     const servantSearch = document.getElementById("servant-search");
+    const clearServantSearch = document.getElementById("clear-servant-search");
     const servantCount = document.getElementById("servant-count");
+    const corpusListMeta = document.getElementById("corpus-list-meta");
     const cacheStatus = document.getElementById("cache-status");
     const responseTime = document.getElementById("response-time");
     const retrievedContexts = document.getElementById("retrieved-contexts");
@@ -158,7 +160,15 @@ document.addEventListener("DOMContentLoaded", () => {
     // Search corpus filter
     servantSearch.addEventListener("input", (e) => {
         const query = e.target.value.toLowerCase().trim();
+        clearServantSearch.hidden = query.length === 0;
         filterDocuments(query);
+    });
+
+    clearServantSearch.addEventListener("click", () => {
+        servantSearch.value = "";
+        clearServantSearch.hidden = true;
+        filterDocuments("");
+        servantSearch.focus();
     });
     
     // ==========================================================================
@@ -247,7 +257,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (!res.ok) throw new Error("documents list not ok");
             const data = await res.json();
             documentsData = data.documents;
-            servantCount.textContent = documentsData.length;
+            servantCount.textContent = `${documentsData.length} docs`;
             renderDocumentList(documentsData);
         } catch (err) {
             servantList.innerHTML = `<li class="loading-item" style="color: var(--danger-color)">Failed to load documents.</li>`;
@@ -256,27 +266,56 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     
     function renderDocumentList(list) {
+        const total = documentsData.length;
+        corpusListMeta.textContent = list.length === total
+            ? `${total} documents`
+            : `${list.length} of ${total} documents`;
         if (list.length === 0) {
-            servantList.innerHTML = `<li class="loading-item">No documents found.</li>`;
+            servantList.innerHTML = `<li class="loading-item">No matching documents.</li>`;
             return;
         }
         
         servantList.innerHTML = "";
         list.forEach(doc => {
+            const documentTitle = doc.title || doc.filename || "Untitled document";
             const li = document.createElement("li");
-            li.className = "servant-item";
-            li.textContent = doc.title;
-            li.title = doc.title;
-            li.addEventListener("click", () => {
-                chatInput.value = `Tell me about ${doc.title}.`;
-                chatInput.focus();
-            });
+            li.className = "corpus-row";
+
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "servant-item";
+            button.title = `Open ${documentTitle}`;
+
+            const title = document.createElement("span");
+            title.className = "corpus-item-title";
+            title.textContent = documentTitle;
+
+            const meta = document.createElement("span");
+            meta.className = "corpus-item-meta";
+            const chunks = `${doc.chunk_count || 0} chunk${doc.chunk_count === 1 ? "" : "s"}`;
+            meta.textContent = doc.source_name ? `${doc.source_name} · ${chunks}` : chunks;
+
+            const icon = document.createElement("i");
+            icon.dataset.lucide = "file-text";
+            icon.setAttribute("aria-hidden", "true");
+
+            const copy = document.createElement("span");
+            copy.className = "corpus-item-copy";
+            copy.append(title, meta);
+            button.append(icon, copy);
+            button.addEventListener("click", () => openSourceDocument(doc.filename));
+            li.appendChild(button);
             servantList.appendChild(li);
         });
+        window.lucide?.createIcons();
     }
     
     function filterDocuments(query) {
-        const filtered = documentsData.filter(d => d.title.toLowerCase().includes(query));
+        const filtered = documentsData.filter(d =>
+            [d.title, d.filename, d.source_name]
+                .filter(Boolean)
+                .some(value => String(value).toLowerCase().includes(query))
+        );
         renderDocumentList(filtered);
     }
     

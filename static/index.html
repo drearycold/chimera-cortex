@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chimera Cortex: An Omni-Context Knowledge Engine</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=20260711-corpus">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -49,14 +49,22 @@
             <!-- Sidebar: Documents List -->
             <aside class="sidebar glass">
                 <div class="sidebar-header">
-                    <h3>Knowledge Base Documents</h3>
-                    <span class="servant-count" id="servant-count">0</span>
+                    <div>
+                        <span class="section-kicker">Knowledge base</span>
+                        <h3>Corpus</h3>
+                    </div>
+                    <span class="servant-count" id="servant-count">0 docs</span>
                 </div>
-                <label class="field-label" for="chat-kb-select">Knowledge base</label>
+                <label class="field-label" for="chat-kb-select">Collection</label>
                 <select id="chat-kb-select" class="sidebar-select"></select>
                 <div class="search-box">
-                    <input type="text" id="servant-search" placeholder="Search document corpus...">
+                    <i data-lucide="search" aria-hidden="true"></i>
+                    <input type="search" id="servant-search" placeholder="Search documents" autocomplete="off">
+                    <button type="button" id="clear-servant-search" class="search-clear" aria-label="Clear document search" hidden>
+                        <i data-lucide="x" aria-hidden="true"></i>
+                    </button>
                 </div>
+                <div class="corpus-list-meta" id="corpus-list-meta" aria-live="polite">0 documents</div>
                 <ul class="servant-list" id="servant-list">
                     <li class="loading-item">Loading documents...</li>
                 </ul>
@@ -422,6 +430,6 @@
     </div>
 
     <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-    <script src="app.js"></script>
+    <script src="app.js?v=20260711-corpus"></script>
 </body>
 </html>
