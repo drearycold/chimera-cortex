@@ -1,5 +1,7 @@
 {
-  "query": "Why did the character change sides?",
+  "query": "Explain the selected text clearly.",
+  "retrieval_query": "installation",
+  "response_locale": "zh-CN",
   "retrieval_filter": {
     "documents": [
       {"external_id": "opaque-book-a", "max_ordinal": 126},

@@ -24,6 +24,10 @@ def api_reader_qa_contract():
             "omitted_filter": "No retrieval_filter means unrestricted KB retrieval.",
             "empty_filter": "An explicit empty retrieval_filter matches no indexed documents.",
             "ordinal_cap": "max_ordinal is inclusive and enforced before retrieval and expansion.",
+            "retrieval_query": "Optional retrieval_query drives rewrite, embedding, BM25, and reranking; query remains the generation instruction.",
+            "response_locale": "Optional response_locale is a validated BCP 47 tag applied only to answer generation.",
+            "query_only_compatibility": "When retrieval_query is omitted, query intentionally drives both retrieval and generation for generic chat clients.",
+            "locale_omission": "When response_locale is omitted, generation applies no additional locale constraint.",
             "metadata_boundary": "Cortex does not interpret Calibre or reader-specific metadata.",
         },
         "schemas": {

@@ -1,6 +1,8 @@
 import time
 import json
 import hashlib
+import logging
+import re
 import httpx
 from typing import Any
 from fastapi import APIRouter, HTTPException
@@ -21,18 +23,34 @@ from cortex.core.rag import (
     decompose_query,
     fetch_and_merge_chunk_range,
     get_embedding,
+    RetrievalBackendError,
     rerank_documents,
     select_context_window,
     should_decompose_query,
 )
 
 router = APIRouter(prefix="/api", tags=["Chat"])
+logger = logging.getLogger("uvicorn.error")
+
+_INFINITY_TEXT_RESERVED = re.compile(r'([+\-=&|><!(){}\[\]^"~*?:\\/])')
 
 class ChatRequest(BaseModel):
-    query: str
+    query: str = Field(min_length=1, max_length=10000)
+    retrieval_query: str | None = Field(default=None, min_length=1, max_length=10000)
+    response_locale: str | None = Field(default=None, min_length=2, max_length=64)
     retrieval_filter: "RetrievalFilter | None" = None
     external_contexts: list[dict[str, Any]] = Field(default_factory=list, max_length=100)
     top_k: int | None = Field(default=None, ge=1, le=100)
+
+    @field_validator("response_locale")
+    @classmethod
+    def valid_response_locale(cls, value: str | None):
+        if value is None:
+            return None
+        normalized = value.strip().replace("_", "-")
+        if not re.fullmatch(r"[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*", normalized):
+            raise ValueError("response_locale must be a valid BCP 47 language tag")
+        return normalized
 
 
 class DocumentConstraint(BaseModel):
@@ -108,7 +126,7 @@ def build_search_payload(
             {
                 "match_method": "text",
                 "fields": "content",
-                "matching_text": query,
+                "matching_text": build_text_search_query(query),
                 "topn": topn,
             },
             {"fusion_method": "rrf", "topn": topn},
@@ -119,16 +137,80 @@ def build_search_payload(
     return payload
 
 
+def build_text_search_query(query: str) -> str:
+    """Escape user text so Infinity treats it as BM25 terms, not query syntax."""
+    normalized = " ".join(query.split())
+    return _INFINITY_TEXT_RESERVED.sub(r"\\\1", normalized)
+
+
+def search_infinity(
+    vector_table: str,
+    payload: dict[str, Any],
+    timeout: float = 10.0,
+) -> list[Any]:
+    """Run an Infinity search and reject transport and application errors."""
+    try:
+        response = httpx.request(
+            "GET",
+            f"{INFINITY_API_URL}/databases/default_db/tables/{vector_table}/docs",
+            json=payload,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            timeout=timeout,
+            trust_env=False,
+        )
+    except httpx.TimeoutException as exc:
+        raise RetrievalBackendError(
+            f"Infinity search timed out after {timeout:g}s"
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise RetrievalBackendError(f"Infinity search request failed: {exc}") from exc
+
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise RetrievalBackendError(
+            f"Infinity search returned invalid JSON (HTTP {response.status_code})"
+        ) from exc
+
+    if response.is_error:
+        message = body.get("error_msg") or response.reason_phrase
+        error_code = body.get("error_code", "unknown")
+        raise RetrievalBackendError(
+            "Infinity search failed "
+            f"(HTTP {response.status_code}, error_code={error_code}): {message}"
+        )
+
+    if body.get("error_code", 0) != 0:
+        message = body.get("error_msg") or "unknown Infinity error"
+        raise RetrievalBackendError(
+            f"Infinity search failed (error_code={body['error_code']}): {message}"
+        )
+
+    for key in ("output", "docs", "rows"):
+        results = body.get(key)
+        if results is not None:
+            if not isinstance(results, list):
+                raise RetrievalBackendError(
+                    f"Infinity search returned invalid '{key}' results"
+                )
+            return results
+    return []
+
+
 def build_chat_cache_key(
     kb_slug: str | None,
     query: str,
     retrieval_filter: dict | None,
     external_contexts: list[dict[str, Any]],
     top_k: int,
+    retrieval_query: str | None = None,
+    response_locale: str | None = None,
 ) -> str:
     identity = json.dumps(
         {
             "query": query,
+            "retrieval_query": retrieval_query,
+            "response_locale": response_locale,
             "retrieval_filter": retrieval_filter,
             "external_contexts": external_contexts,
             "top_k": top_k,
@@ -185,6 +267,12 @@ def _run_chat(req: ChatRequest, knowledge_base: dict | None = None):
     query = unicodedata.normalize('NFC', req.query.strip())
     if not query:
         raise HTTPException(status_code=400, detail="Empty query.")
+    retrieval_query = unicodedata.normalize(
+        'NFC',
+        (req.retrieval_query or query).strip(),
+    )
+    if not retrieval_query:
+        raise HTTPException(status_code=400, detail="Empty retrieval query.")
 
     kb_slug = knowledge_base["slug"] if knowledge_base else None
     ingest_config = knowledge_base["ingest_config"] if knowledge_base else default_ingest_config()
@@ -221,6 +309,8 @@ def _run_chat(req: ChatRequest, knowledge_base: dict | None = None):
         filter_data,
         req.external_contexts,
         top_k_contexts,
+        retrieval_query=retrieval_query,
+        response_locale=req.response_locale,
     )
 
     # 1. Check Redis Cache
@@ -238,18 +328,25 @@ def _run_chat(req: ChatRequest, knowledge_base: dict | None = None):
     # 2. Decompose Query
     t_decomp_start = time.time()
     sub_queries = (
-        decompose_query(query, model=rewrite_model)
-        if rewrite_enabled and should_decompose_query(query)
-        else [query]
+        decompose_query(retrieval_query, model=rewrite_model)
+        if rewrite_enabled and should_decompose_query(retrieval_query)
+        else [retrieval_query]
     )
     decomp_ms = (time.time() - t_decomp_start) * 1000.0
-    print(f"Decomposed query '{query}' into: {sub_queries} in {decomp_ms:.2f}ms")
+    print(
+        f"Decomposed retrieval query '{retrieval_query}' into: "
+        f"{sub_queries} in {decomp_ms:.2f}ms"
+    )
 
     # 3. Get Query Embeddings and Retrieve Closest Chunks
     t_embed_start = time.time()
     
     # Setup Entity-Balanced Retrieval Slicing quotas within the final context budget.
-    queries_to_run = allocate_query_quotas(query, sub_queries, top_k_contexts)
+    queries_to_run = allocate_query_quotas(
+        retrieval_query,
+        sub_queries,
+        top_k_contexts,
+    )
     context_window = select_context_window(
         configured_context_window,
         len(queries_to_run),
@@ -270,38 +367,19 @@ def _run_chat(req: ChatRequest, knowledge_base: dict | None = None):
     # Establish connection once for the loop
     mysql_conn = None
     cursor = None
+    active_sub_query = None
     try:
         mysql_conn = get_mysql_connection()
         cursor = mysql_conn.cursor()
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
-        
         for sq, sq_vector, quota in query_vectors:
+            active_sub_query = sq
             if not sq_vector:
                 print(f"[Warning] Failed to get embedding for sub-query: {sq}")
                 continue
                 
             search_payload = build_search_payload(sq, sq_vector, retrieval_filter)
             
-            resp = httpx.request(
-                "GET",
-                f"{INFINITY_API_URL}/databases/default_db/tables/{vector_table}/docs",
-                json=search_payload,
-                headers=headers,
-                timeout=10.0
-            )
-            resp.raise_for_status()
-            search_res = resp.json()
-            
-            raw_results = []
-            if search_res.get("error_code", 0) == 0:
-                if "output" in search_res:
-                    raw_results = search_res["output"]
-                elif "docs" in search_res:
-                    raw_results = search_res["docs"]
-                elif "rows" in search_res:
-                    raw_results = search_res["rows"]
-            else:
-                print(f"[Warning] Infinity HTTP search returned error: {search_res.get('error_msg')}")
+            raw_results = search_infinity(vector_table, search_payload)
                 
             sq_contexts: list[dict[str, Any]] = []
             for idx, item_list in enumerate(raw_results):
@@ -383,7 +461,20 @@ def _run_chat(req: ChatRequest, knowledge_base: dict | None = None):
                 })
                 
     except Exception as e:
-        print(f"[Warning] Failed to retrieve context from Infinity/MySQL: {e}")
+        logger.exception(
+            "Retrieval backend failure stage=first_stage kb=%r table=%r "
+            "sub_query=%r filter=%r error_type=%s error=%s",
+            kb_slug,
+            vector_table,
+            active_sub_query,
+            retrieval_filter,
+            type(e).__name__,
+            e,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"Retrieval backend error: {e}",
+        ) from e
     finally:
         if cursor:
             cursor.close()
@@ -464,13 +555,32 @@ def _run_chat(req: ChatRequest, knowledge_base: dict | None = None):
     for doc_id, merged_ranges in doc_ranges.items():
         doc_range_texts[doc_id] = []
         for start, end in merged_ranges:
-            text = fetch_and_merge_chunk_range(
-                doc_id,
-                start,
-                end,
-                vector_table=vector_table,
-                retrieval_filter=retrieval_filter,
-            )
+            try:
+                text = fetch_and_merge_chunk_range(
+                    doc_id,
+                    start,
+                    end,
+                    vector_table=vector_table,
+                    retrieval_filter=retrieval_filter,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Retrieval backend failure stage=adjacent_expansion kb=%r "
+                    "table=%r document_id=%r range=%r-%r filter=%r "
+                    "error_type=%s error=%s",
+                    kb_slug,
+                    vector_table,
+                    doc_id,
+                    start,
+                    end,
+                    retrieval_filter,
+                    type(exc).__name__,
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Retrieval backend error: {exc}",
+                ) from exc
             doc_range_texts[doc_id].append((start, end, text))
             
     for c in contexts:
@@ -529,6 +639,11 @@ def _run_chat(req: ChatRequest, knowledge_base: dict | None = None):
     if req.external_contexts:
         external_context_text = json.dumps(req.external_contexts, ensure_ascii=False)
         system_prompt += f"\n\nAdditional external evidence:\n{external_context_text}"
+    if req.response_locale:
+        system_prompt += (
+            "\n\nWrite the answer in the language identified by the BCP 47 locale "
+            f"'{req.response_locale}'."
+        )
     full_prompt = f"System: {system_prompt}\n\nUser Question: {query}\n\nAnswer:"
     
     try:
@@ -588,6 +703,8 @@ def _run_chat(req: ChatRequest, knowledge_base: dict | None = None):
             },
             "first_stage_candidates": first_stage_candidates,
             "second_stage_candidates": second_stage_candidates,
+            "retrieval_query": retrieval_query,
+            "response_locale": req.response_locale,
             "llm_prompt": full_prompt
         }
     }

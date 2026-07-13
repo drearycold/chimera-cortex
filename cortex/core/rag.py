@@ -8,6 +8,10 @@ from .config import (
     OLLAMA_GENERATE_URL, OLLAMA_GEN_MODEL
 )
 
+
+class RetrievalBackendError(RuntimeError):
+    """Raised when a retrieval service cannot return trustworthy results."""
+
 def parse_document_title(filename):
     """Clean and extract clear, human-readable document titles from filenames."""
     import unicodedata
@@ -399,19 +403,23 @@ def fetch_and_merge_chunk_range(
             f"{INFINITY_API_URL}/databases/default_db/tables/{vector_table}/docs",
             json=search_payload,
             headers={"Content-Type": "application/json"},
-            timeout=10.0
+            timeout=10.0,
+            trust_env=False,
         )
         resp.raise_for_status()
         res = resp.json()
+        if res.get("error_code", 0) != 0:
+            raise RetrievalBackendError(
+                res.get("error_msg") or "Infinity adjacent chunk retrieval failed"
+            )
         
         raw_results = []
-        if res.get("error_code", 0) == 0:
-            if "output" in res:
-                raw_results = res["output"]
-            elif "docs" in res:
-                raw_results = res["docs"]
-            elif "rows" in res:
-                raw_results = res["rows"]
+        if "output" in res:
+            raw_results = res["output"]
+        elif "docs" in res:
+            raw_results = res["docs"]
+        elif "rows" in res:
+            raw_results = res["rows"]
                 
         # Parse and sort by chunk_index
         parsed_chunks = []
@@ -451,6 +459,8 @@ def fetch_and_merge_chunk_range(
                 
         return merged
         
-    except Exception as e:
-        print(f"[Warning] Failed to fetch or merge chunk range for doc_id={doc_id}, range={start_idx}-{end_idx}: {e}")
-        return ""
+    except Exception as exc:
+        raise RetrievalBackendError(
+            "Infinity adjacent chunk retrieval failed for "
+            f"document_id={doc_id}, range={start_idx}-{end_idx}: {exc}"
+        ) from exc
