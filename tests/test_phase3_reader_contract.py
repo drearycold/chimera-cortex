@@ -292,9 +292,36 @@ class PhaseThreeReaderContractTests(unittest.TestCase):
             10,
             generation_config={"model": "new-generation-model"},
         )
+        compact_search = build_chat_cache_key(
+            "reader",
+            "question",
+            {"documents": [{"external_id": "opaque-a", "max_ordinal": 126}]},
+            [],
+            10,
+            search_config={"context_window": 1},
+        )
+        wide_search = build_chat_cache_key(
+            "reader",
+            "question",
+            {"documents": [{"external_id": "opaque-a", "max_ordinal": 126}]},
+            [],
+            10,
+            search_config={"context_window": 4},
+        )
         self.assertEqual(
-            6,
-            len({capped, uncapped, external, retrieval, locale, generation}),
+            8,
+            len(
+                {
+                    capped,
+                    uncapped,
+                    external,
+                    retrieval,
+                    locale,
+                    generation,
+                    compact_search,
+                    wide_search,
+                }
+            ),
         )
 
         version_two_identity = json.dumps(

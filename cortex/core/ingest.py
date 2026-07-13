@@ -147,6 +147,11 @@ class IngestManager:
                 "source_id": self.source_id,
             }
 
+    def is_active(self) -> bool:
+        """Return whether a worker still owns the global ingestion slot."""
+        with self.lock:
+            return self.is_running
+
     def clear_active(self):
         """Reset manager execution state but keep the final status."""
         with self.lock:
@@ -311,7 +316,7 @@ class IngestManager:
 
         def mark_document_success(filename: str):
             nonlocal doc_success_count
-            if filename in successful_documents:
+            if filename in successful_documents or filename in failed_documents:
                 return
             successful_documents.add(filename)
             doc_success_count += 1
@@ -319,7 +324,7 @@ class IngestManager:
                 self.processed_files = doc_success_count
 
         def mark_document_failed(filename: str, detail: str):
-            if filename in failed_documents:
+            if filename in failed_documents or filename in successful_documents:
                 return
             failed_documents.add(filename)
             with self.lock:

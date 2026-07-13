@@ -195,10 +195,7 @@ class PhaseTwoWebSourceTests(unittest.TestCase):
 
     @patch("cortex.core.ingest.manager")
     def test_scheduled_sync_defers_until_ingestion_is_available(self, manager):
-        manager.get_status.side_effect = [
-            {"status": "running"},
-            {"status": "completed"},
-        ]
+        manager.is_active.side_effect = [True, False]
         fake_scheduler = Mock()
         fake_scheduler.running = True
         scheduler = SourceScheduler()
@@ -216,6 +213,49 @@ class PhaseTwoWebSourceTests(unittest.TestCase):
         deferred.args[0](*deferred.kwargs["args"])
 
         manager.start_source.assert_called_once_with("docs", 9)
+
+    @patch("cortex.core.database.list_watch_sources", return_value=[])
+    @patch("cortex.core.database.list_scheduled_sources")
+    def test_scheduler_refresh_preserves_valid_deferred_sync(
+        self, list_sources_mock, _list_watch_sources_mock
+    ):
+        list_sources_mock.return_value = [
+            {
+                "id": 9,
+                "kb_slug": "docs",
+                "name": "Documentation",
+                "sync_cron": "0 */6 * * *",
+            }
+        ]
+        fake_scheduler = Mock()
+        fake_scheduler.running = True
+        fake_scheduler.get_jobs.return_value = [
+            SimpleNamespace(id="source-sync-9"),
+            SimpleNamespace(id="source-deferred-sync-9"),
+        ]
+        scheduler = SourceScheduler()
+        scheduler.scheduler = fake_scheduler
+
+        scheduler.refresh()
+
+        fake_scheduler.remove_job.assert_called_once_with("source-sync-9")
+
+    @patch("cortex.core.ingest.manager")
+    def test_scheduled_sync_defers_during_ingestion_finalization(self, manager):
+        manager.is_active.return_value = True
+        manager.get_status.return_value = {"status": "completed"}
+        fake_scheduler = Mock()
+        fake_scheduler.running = True
+        scheduler = SourceScheduler()
+        scheduler.scheduler = fake_scheduler
+
+        scheduler._run_source_sync("docs", 9)
+
+        manager.start_source.assert_not_called()
+        self.assertEqual(
+            "source-deferred-sync-9",
+            fake_scheduler.add_job.call_args.kwargs["id"],
+        )
 
 
 if __name__ == "__main__":

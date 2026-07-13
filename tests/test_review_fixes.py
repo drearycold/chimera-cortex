@@ -141,6 +141,98 @@ class ReviewRegressionTests(unittest.TestCase):
         )
         self.assertEqual(1, record_log.call_args.kwargs["docs_skipped"])
 
+    def test_batch_completion_failure_keeps_document_counts_disjoint(self):
+        first = self._cloud_document()
+        second_content = b"Second cloud evidence."
+        second = RawDocument(
+            kb_id=1,
+            source_id=7,
+            source_type="cloud_drive",
+            origin_path="google_drive:file-2",
+            filename="second.md",
+            title="Second",
+            format="md",
+            raw_bytes=second_content,
+            content_markdown=second_content.decode(),
+            content_hash=hashlib.sha256(second_content).hexdigest(),
+            source_modified_at=1_700_000_001.0,
+            metadata={},
+        )
+        knowledge_base = {
+            "id": 1,
+            "slug": "cloud",
+            "enabled": True,
+            "vector_table": "chunks_cloud",
+            "minio_bucket": "cortex-documents",
+            "ingest_config": {"embedding": {}, "chunking": {}},
+        }
+        source = {
+            "id": 7,
+            "type": "cloud_drive",
+            "enabled": True,
+            "config": {"provider": "google_drive", "folder_id": "folder"},
+        }
+        connector = Mock()
+        connector.scan.return_value = [first, second]
+        connector.is_full_snapshot = False
+        connector.deleted_origin_paths = []
+        connector.next_cursor = "cursor-new"
+        connector.config = dict(source["config"])
+        connection = Mock()
+        cursor = connection.cursor.return_value
+        cursor.fetchall.return_value = []
+        cursor.fetchone.return_value = None
+        next_document_id = 100
+
+        def execute(query, params=None):
+            nonlocal next_document_id
+            if query.lstrip().startswith("INSERT INTO documents"):
+                next_document_id += 1
+                cursor.lastrowid = next_document_id
+            if (
+                "UPDATE documents SET content_hash" in query
+                and params is not None
+                and params[1] == 102
+            ):
+                raise RuntimeError("completion update failed")
+
+        cursor.execute.side_effect = execute
+        manager = IngestManager()
+        manager.status = "running"
+        manager.is_running = True
+        infinity_response = Mock()
+        infinity_response.json.return_value = {"error_code": 0}
+
+        with (
+            patch("cortex.core.ingest.get_knowledge_base", return_value=knowledge_base),
+            patch("cortex.core.ingest.get_source", return_value=source),
+            patch("cortex.core.ingest.GoogleDriveConnector", return_value=connector),
+            patch("cortex.core.ingest.ensure_minio_bucket"),
+            patch("cortex.core.ingest.ensure_vector_table", return_value=False),
+            patch("cortex.core.ingest.ensure_external_vector_columns"),
+            patch("cortex.core.ingest.get_minio_client", return_value=Mock()),
+            patch("cortex.core.ingest.get_mysql_connection", return_value=connection),
+            patch(
+                "cortex.core.ingest.chunk_markdown",
+                side_effect=[[("", "Cloud evidence.")], [("", "Second cloud evidence.")]],
+            ),
+            patch(
+                "cortex.core.ingest.get_embeddings_batch",
+                return_value=[[0.1, 0.2], [0.3, 0.4]],
+            ),
+            patch("cortex.core.ingest.httpx.post", return_value=infinity_response),
+            patch("cortex.core.ingest.record_ingestion_log") as record_log,
+        ):
+            manager._run_wrapper(None, False, "cloud", 7)
+
+        self.assertEqual("failed", manager.status)
+        self.assertEqual(1, manager.processed_files)
+        self.assertEqual(1, manager.failed_files)
+        self.assertEqual(2, manager.total_files)
+        self.assertEqual(1, record_log.call_args.kwargs["docs_processed"])
+        self.assertEqual(1, record_log.call_args.kwargs["docs_failed"])
+        self.assertEqual(0, record_log.call_args.kwargs["docs_skipped"])
+
     def test_source_force_rebuild_does_not_drop_kb_vector_table(self):
         knowledge_base = {
             "id": 1,

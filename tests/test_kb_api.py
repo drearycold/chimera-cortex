@@ -122,10 +122,11 @@ class KnowledgeBaseApiTests(unittest.TestCase):
         self.assertEqual(409, raised.exception.status_code)
         update_mock.assert_not_called()
 
-    @patch("cortex.api.kb.update_knowledge_base", return_value={"slug": "empty"})
+    @patch("cortex.api.kb.ensure_vector_table")
+    @patch("cortex.api.kb.update_knowledge_base")
     @patch("cortex.api.kb.get_knowledge_base")
-    def test_empty_kb_allows_index_affecting_config_change(
-        self, get_mock, update_mock
+    def test_empty_kb_rejects_index_change_without_storage_reprovisioning(
+        self, get_mock, update_mock, ensure_table_mock
     ):
         current_ingest = default_ingest_config()
         get_mock.return_value = {
@@ -137,16 +138,15 @@ class KnowledgeBaseApiTests(unittest.TestCase):
         changed_ingest = deepcopy(current_ingest)
         changed_ingest["embedding"]["model"] = "bge-m3:latest"
 
-        result = api_update_knowledge_base(
-            "empty",
-            KnowledgeBaseUpdate(ingest_config=changed_ingest),
-        )
+        with self.assertRaises(HTTPException) as raised:
+            api_update_knowledge_base(
+                "empty",
+                KnowledgeBaseUpdate(ingest_config=changed_ingest),
+            )
 
-        self.assertEqual("empty", result["slug"])
-        self.assertEqual(
-            changed_ingest,
-            update_mock.call_args.args[1]["ingest_config"],
-        )
+        self.assertEqual(409, raised.exception.status_code)
+        update_mock.assert_not_called()
+        ensure_table_mock.assert_not_called()
 
     @patch("cortex.api.kb.update_knowledge_base", return_value={"slug": "populated"})
     @patch("cortex.api.kb.get_knowledge_base")

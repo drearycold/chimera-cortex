@@ -41,12 +41,22 @@ class SourceScheduler:
             return
         from .database import list_scheduled_sources, list_watch_sources
 
+        scheduled_sources = list_scheduled_sources()
+        watch_sources = list_watch_sources()
+        valid_source_ids = {
+            source["id"] for source in [*scheduled_sources, *watch_sources]
+        }
         for job in self.scheduler.get_jobs():
-            if job.id.startswith(
-                ("source-sync-", "source-watch-sync-", "source-deferred-sync-")
-            ):
+            if job.id.startswith("source-sync-"):
                 self.scheduler.remove_job(job.id)
-        for source in list_scheduled_sources():
+                continue
+            for prefix in ("source-watch-sync-", "source-deferred-sync-"):
+                if job.id.startswith(prefix):
+                    source_id = int(job.id.removeprefix(prefix))
+                    if source_id not in valid_source_ids:
+                        self.scheduler.remove_job(job.id)
+                    break
+        for source in scheduled_sources:
             trigger = cron_trigger(source["sync_cron"])
             self.scheduler.add_job(
                 self._run_source_sync,
@@ -60,7 +70,7 @@ class SourceScheduler:
                 misfire_grace_time=300,
             )
         self._stop_watchers()
-        for source in list_watch_sources():
+        for source in watch_sources:
             try:
                 connector = DirectoryConnector(
                     source["kb_id"],
@@ -118,7 +128,7 @@ class SourceScheduler:
     def _run_watched_source_sync(self, kb_slug: str, source_id: int):
         from .ingest import manager
 
-        if manager.get_status()["status"] == "running":
+        if manager.is_active():
             self.scheduler.add_job(
                 self._run_watched_source_sync,
                 trigger="date",
@@ -168,7 +178,7 @@ class SourceScheduler:
     def _run_source_sync(self, kb_slug: str, source_id: int):
         from .ingest import manager
 
-        if manager.get_status()["status"] == "running":
+        if manager.is_active():
             print(
                 f"[SCHEDULER] Deferring source {source_id}; ingestion is already active."
             )
@@ -177,7 +187,7 @@ class SourceScheduler:
         try:
             manager.start_source(kb_slug, source_id)
         except Exception as exc:
-            if manager.get_status()["status"] == "running":
+            if manager.is_active():
                 self._defer_source_sync(kb_slug, source_id)
                 return
             print(f"[SCHEDULER] Failed to start source {source_id}: {exc}")

@@ -202,13 +202,12 @@ def api_update_knowledge_base(slug: str, req: KnowledgeBaseUpdate):
         requested_ingest is not None
         and _index_identity(requested_ingest)
         != _index_identity(current["ingest_config"])
-        and int(current.get("stats", {}).get("document_count", 0)) > 0
     ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                "Embedding or chunking configuration cannot be changed for a populated "
-                "knowledge base without an orchestrated rebuild."
+                "Embedding or chunking configuration cannot be changed after knowledge "
+                "base creation without an orchestrated rebuild."
             ),
         )
 
