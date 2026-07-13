@@ -42,7 +42,9 @@ class SourceScheduler:
         from .database import list_scheduled_sources, list_watch_sources
 
         for job in self.scheduler.get_jobs():
-            if job.id.startswith(("source-sync-", "source-watch-sync-")):
+            if job.id.startswith(
+                ("source-sync-", "source-watch-sync-", "source-deferred-sync-")
+            ):
                 self.scheduler.remove_job(job.id)
         for source in list_scheduled_sources():
             trigger = cron_trigger(source["sync_cron"])
@@ -145,18 +147,39 @@ class SourceScheduler:
             "next_run_at": next_run.isoformat() if next_run is not None else None,
         }
 
-    @staticmethod
-    def _run_source_sync(kb_slug: str, source_id: int):
+    def _defer_source_sync(self, kb_slug: str, source_id: int):
+        if not self.running:
+            print(
+                f"[SCHEDULER] Cannot defer source {source_id}; scheduler is not running."
+            )
+            return
+        self.scheduler.add_job(
+            self._run_source_sync,
+            trigger="date",
+            run_date=datetime.now(timezone.utc) + timedelta(seconds=2),
+            args=[kb_slug, source_id],
+            id=f"source-deferred-sync-{source_id}",
+            name=f"Deferred sync {kb_slug} / {source_id}",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+        )
+
+    def _run_source_sync(self, kb_slug: str, source_id: int):
         from .ingest import manager
 
         if manager.get_status()["status"] == "running":
             print(
-                f"[SCHEDULER] Skipping source {source_id}; ingestion is already active."
+                f"[SCHEDULER] Deferring source {source_id}; ingestion is already active."
             )
+            self._defer_source_sync(kb_slug, source_id)
             return
         try:
             manager.start_source(kb_slug, source_id)
         except Exception as exc:
+            if manager.get_status()["status"] == "running":
+                self._defer_source_sync(kb_slug, source_id)
+                return
             print(f"[SCHEDULER] Failed to start source {source_id}: {exc}")
 
 

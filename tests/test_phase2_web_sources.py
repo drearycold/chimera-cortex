@@ -59,6 +59,29 @@ class PhaseTwoWebSourceTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "robots denied"):
             connector.scan()
 
+    def test_web_connector_rejects_partial_snapshot(self):
+        successful = SimpleNamespace(
+            success=True,
+            url="https://docs.example.com/guide",
+            markdown="# Guide\n\nAvailable page.",
+            metadata={"title": "Guide"},
+            status_code=200,
+        )
+        failed = SimpleNamespace(
+            success=False,
+            error_message="timeout",
+            url="https://docs.example.com/missing",
+        )
+        connector = WebConnector(
+            2,
+            7,
+            {"url": "https://docs.example.com"},
+            crawl_runner=lambda _config: [successful, failed],
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "missing.*timeout"):
+            connector.scan()
+
     def test_source_validation_requires_web_url_and_scheduled_cron(self):
         with self.assertRaises(HTTPException):
             _validate_source_config("web", {"url": "relative"}, "manual", None)
@@ -169,6 +192,30 @@ class PhaseTwoWebSourceTests(unittest.TestCase):
         self.assertTrue(result["scheduler_running"])
         self.assertTrue(result["scheduled"])
         self.assertEqual(next_run.isoformat(), result["next_run_at"])
+
+    @patch("cortex.core.ingest.manager")
+    def test_scheduled_sync_defers_until_ingestion_is_available(self, manager):
+        manager.get_status.side_effect = [
+            {"status": "running"},
+            {"status": "completed"},
+        ]
+        fake_scheduler = Mock()
+        fake_scheduler.running = True
+        scheduler = SourceScheduler()
+        scheduler.scheduler = fake_scheduler
+
+        scheduler._run_source_sync("docs", 9)
+
+        deferred = fake_scheduler.add_job.call_args
+        self.assertEqual(scheduler._run_source_sync, deferred.args[0])
+        self.assertEqual("source-deferred-sync-9", deferred.kwargs["id"])
+        self.assertEqual(["docs", 9], deferred.kwargs["args"])
+        self.assertTrue(deferred.kwargs["replace_existing"])
+        manager.start_source.assert_not_called()
+
+        deferred.args[0](*deferred.kwargs["args"])
+
+        manager.start_source.assert_called_once_with("docs", 9)
 
 
 if __name__ == "__main__":

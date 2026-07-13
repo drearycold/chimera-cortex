@@ -2,9 +2,11 @@ import hashlib
 import json
 import unittest
 from datetime import datetime
+from typing import Any
 from unittest.mock import Mock, patch
 
 from cortex.core.connectors.calibre import CalibreConnector
+from cortex.core.connectors.base import RawDocument
 from cortex.core.external_documents import (
     delete_external_document,
     upsert_external_document,
@@ -14,6 +16,131 @@ from cortex.core.scheduler import SourceScheduler
 
 
 class ReviewRegressionTests(unittest.TestCase):
+    @staticmethod
+    def _cloud_document() -> RawDocument:
+        content = b"Cloud evidence."
+        return RawDocument(
+            kb_id=1,
+            source_id=7,
+            source_type="cloud_drive",
+            origin_path="google_drive:file-1",
+            filename="cloud.md",
+            title="Cloud",
+            format="md",
+            raw_bytes=content,
+            content_markdown=content.decode(),
+            content_hash=hashlib.sha256(content).hexdigest(),
+            source_modified_at=1_700_000_000.0,
+            metadata={},
+        )
+
+    def _run_cloud_ingest(
+        self,
+        *,
+        minio_error: Exception | None = None,
+        embedding_error: Exception | None = None,
+        cancelled: bool = False,
+    ):
+        knowledge_base = {
+            "id": 1,
+            "slug": "cloud",
+            "enabled": True,
+            "vector_table": "chunks_cloud",
+            "minio_bucket": "cortex-documents",
+            "ingest_config": {"embedding": {}, "chunking": {}},
+        }
+        source: dict[str, Any] = {
+            "id": 7,
+            "type": "cloud_drive",
+            "enabled": True,
+            "config": {
+                "provider": "google_drive",
+                "folder_id": "folder",
+                "cursor": "cursor-old",
+            },
+        }
+        connector = Mock()
+        connector.scan.return_value = [self._cloud_document()]
+        connector.is_full_snapshot = False
+        connector.deleted_origin_paths = []
+        connector.next_cursor = "cursor-new"
+        connector.config = dict(source["config"])
+        connection = Mock()
+        cursor = connection.cursor.return_value
+        cursor.fetchall.return_value = []
+        cursor.fetchone.return_value = None
+        cursor.lastrowid = 101
+        minio = Mock()
+        if minio_error is not None:
+            minio.put_object.side_effect = minio_error
+        manager = IngestManager()
+        manager.status = "running"
+        manager.is_running = True
+        if cancelled:
+            manager.cancel_event.set()
+
+        with (
+            patch("cortex.core.ingest.get_knowledge_base", return_value=knowledge_base),
+            patch("cortex.core.ingest.get_source", return_value=source),
+            patch("cortex.core.ingest.GoogleDriveConnector", return_value=connector),
+            patch("cortex.core.ingest.ensure_minio_bucket"),
+            patch("cortex.core.ingest.ensure_vector_table", return_value=False),
+            patch("cortex.core.ingest.ensure_external_vector_columns"),
+            patch("cortex.core.ingest.get_minio_client", return_value=minio),
+            patch("cortex.core.ingest.get_mysql_connection", return_value=connection),
+            patch(
+                "cortex.core.ingest.chunk_markdown",
+                return_value=[("", "Cloud evidence.")],
+            ),
+            patch(
+                "cortex.core.ingest.get_embeddings_batch",
+                side_effect=embedding_error,
+                return_value=[[0.1, 0.2]],
+            ),
+            patch("cortex.core.ingest.record_ingestion_log") as record_log,
+        ):
+            manager._run_wrapper(None, False, "cloud", 7)
+
+        return manager, cursor, record_log
+
+    def test_cloud_cursor_is_preserved_after_document_failure(self):
+        manager, cursor, record_log = self._run_cloud_ingest(
+            minio_error=RuntimeError("upload failed")
+        )
+
+        self.assertEqual("failed", manager.status)
+        self.assertEqual(0, manager.processed_files)
+        self.assertEqual(1, manager.failed_files)
+        self.assertFalse(
+            any("UPDATE sources SET" in call.args[0] for call in cursor.execute.call_args_list)
+        )
+        self.assertEqual(1, record_log.call_args.kwargs["docs_failed"])
+
+    def test_cloud_cursor_is_preserved_after_final_flush_failure(self):
+        manager, cursor, record_log = self._run_cloud_ingest(
+            embedding_error=RuntimeError("embedding batch failed")
+        )
+
+        self.assertEqual("failed", manager.status)
+        self.assertEqual(0, manager.processed_files)
+        self.assertEqual(1, manager.failed_files)
+        self.assertFalse(
+            any("UPDATE sources SET" in call.args[0] for call in cursor.execute.call_args_list)
+        )
+        self.assertIn("final chunk queue", manager.error_message)
+        self.assertEqual(1, record_log.call_args.kwargs["docs_failed"])
+
+    def test_cloud_cursor_is_preserved_after_cancellation(self):
+        manager, cursor, record_log = self._run_cloud_ingest(cancelled=True)
+
+        self.assertEqual("cancelled", manager.status)
+        self.assertEqual(0, manager.processed_files)
+        self.assertEqual(0, manager.failed_files)
+        self.assertFalse(
+            any("UPDATE sources SET" in call.args[0] for call in cursor.execute.call_args_list)
+        )
+        self.assertEqual(1, record_log.call_args.kwargs["docs_skipped"])
+
     def test_source_force_rebuild_does_not_drop_kb_vector_table(self):
         knowledge_base = {
             "id": 1,

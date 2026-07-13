@@ -284,7 +284,18 @@ class PhaseThreeReaderContractTests(unittest.TestCase):
             retrieval_query="installation",
             response_locale="zh-CN",
         )
-        self.assertEqual(5, len({capped, uncapped, external, retrieval, locale}))
+        generation = build_chat_cache_key(
+            "reader",
+            "question",
+            {"documents": [{"external_id": "opaque-a", "max_ordinal": 126}]},
+            [],
+            10,
+            generation_config={"model": "new-generation-model"},
+        )
+        self.assertEqual(
+            6,
+            len({capped, uncapped, external, retrieval, locale, generation}),
+        )
 
         version_two_identity = json.dumps(
             {

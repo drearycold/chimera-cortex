@@ -119,14 +119,22 @@ class WebConnector(BaseConnector):
             if self.crawl_runner is not None
             else asyncio.run(self._crawl())
         )
-        documents = [document for result in results if (document := self._document(result))]
-        if not documents:
-            errors = [
-                str(getattr(result, "error_message", "crawl returned no Markdown"))
-                for result in results
+        documents = []
+        errors = []
+        for result in results:
+            document = self._document(result)
+            if document is not None:
+                documents.append(document)
+                continue
+            url = str(getattr(result, "url", self.config["url"]))
+            detail = (
+                str(getattr(result, "error_message", "crawl failed"))
                 if not getattr(result, "success", True)
-            ]
-            detail = "; ".join(errors) or "crawl returned no Markdown"
+                else "crawl returned no Markdown"
+            )
+            errors.append(f"{url}: {detail}")
+        if errors or not documents:
+            detail = "; ".join(errors) or "crawl returned no pages"
             raise RuntimeError(f"Web crawl failed: {detail}")
         return documents
 

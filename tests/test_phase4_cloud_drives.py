@@ -132,6 +132,32 @@ class PhaseFourCloudDriveTests(unittest.TestCase):
         self.assertIn("Grounded cloud note", documents[0].content_markdown)
         files_api.export.assert_called_once_with(fileId="g-1", mimeType="text/plain")
 
+    def test_google_drive_captures_cursor_before_full_folder_scan(self):
+        events = []
+        token_request = Mock()
+        token_request.execute.side_effect = lambda: (
+            events.append("token") or {"startPageToken": "before-scan"}
+        )
+        changes_api = Mock()
+        changes_api.getStartPageToken.return_value = token_request
+        service = Mock()
+        service.changes.return_value = changes_api
+        connector = GoogleDriveConnector(
+            1,
+            2,
+            {"folder_id": "folder", "token_env": "GOOGLE_TOKEN"},
+            service=service,
+        )
+        connector._list_folder = Mock(
+            side_effect=lambda: (events.append("folder-scan") or ([], {"folder"}))
+        )
+
+        documents = connector.scan()
+
+        self.assertEqual([], documents)
+        self.assertEqual(["token", "folder-scan"], events)
+        self.assertEqual("before-scan", connector.next_cursor)
+
     def test_google_drive_incremental_removed_change_uses_opaque_origin(self):
         changes_api = Mock()
         changes_api.list.return_value.execute.return_value = {

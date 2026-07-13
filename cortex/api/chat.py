@@ -36,7 +36,7 @@ router = APIRouter(prefix="/api", tags=["Chat"])
 logger = logging.getLogger("uvicorn.error")
 
 _INFINITY_TEXT_RESERVED = re.compile(r'([+\-=&|><!(){}\[\]^"~*?:\\/])')
-_CHAT_CACHE_SCHEMA_VERSION = 3
+_CHAT_CACHE_SCHEMA_VERSION = 4
 
 class ChatRequest(BaseModel):
     query: str = Field(min_length=1, max_length=10000)
@@ -209,6 +209,7 @@ def build_chat_cache_key(
     top_k: int,
     retrieval_query: str | None = None,
     response_locale: str | None = None,
+    generation_config: dict[str, Any] | None = None,
 ) -> str:
     identity = json.dumps(
         {
@@ -219,6 +220,7 @@ def build_chat_cache_key(
             "retrieval_filter": retrieval_filter,
             "external_contexts": external_contexts,
             "top_k": top_k,
+            "generation_config": generation_config,
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -316,6 +318,7 @@ def _run_chat(req: ChatRequest, knowledge_base: dict | None = None):
         top_k_contexts,
         retrieval_query=retrieval_query,
         response_locale=req.response_locale,
+        generation_config=generation_config,
     )
 
     # 1. Check Redis Cache

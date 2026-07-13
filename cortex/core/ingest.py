@@ -58,6 +58,7 @@ class IngestManager:
         self.is_running = False
         self.status = "idle"  # "idle", "running", "completed", "failed", "cancelled"
         self.processed_files = 0
+        self.failed_files = 0
         self.total_files = 0
         self.current_file = ""
         self.error_message = ""
@@ -80,6 +81,7 @@ class IngestManager:
             self.is_running = True
             self.status = "running"
             self.processed_files = 0
+            self.failed_files = 0
             self.total_files = 0
             self.current_file = ""
             self.error_message = ""
@@ -107,6 +109,7 @@ class IngestManager:
             self.is_running = True
             self.status = "running"
             self.processed_files = 0
+            self.failed_files = 0
             self.total_files = 0
             self.current_file = ""
             self.error_message = ""
@@ -135,6 +138,7 @@ class IngestManager:
             return {
                 "status": self.status,
                 "processed_files": self.processed_files,
+                "failed_files": self.failed_files,
                 "total_files": self.total_files,
                 "current_file": self.current_file,
                 "error_message": self.error_message,
@@ -165,8 +169,11 @@ class IngestManager:
                     source_id=source_id,
                     action="force_rebuild" if force_rebuild else "sync",
                     docs_processed=self.processed_files,
-                    docs_skipped=max(0, self.total_files - self.processed_files),
-                    docs_failed=1 if self.status == "failed" else 0,
+                    docs_skipped=max(
+                        0,
+                        self.total_files - self.processed_files - self.failed_files,
+                    ),
+                    docs_failed=self.failed_files,
                     duration_seconds=time.monotonic() - started_at,
                     error_detail=self.error_message or None,
                 )
@@ -295,9 +302,36 @@ class IngestManager:
         doc_success_count = 0
         total_chunks_indexed = 0
         chunk_queue: list[dict] = []
+        successful_documents: set[str] = set()
+        failed_documents: set[str] = set()
+        run_errors: list[str] = []
         
         # Track chunk completion: { doc_id: {"total": total, "flushed": 0, "hash": file_hash} }
         chunk_progress: dict[int, dict] = {}
+
+        def mark_document_success(filename: str):
+            nonlocal doc_success_count
+            if filename in successful_documents:
+                return
+            successful_documents.add(filename)
+            doc_success_count += 1
+            with self.lock:
+                self.processed_files = doc_success_count
+
+        def mark_document_failed(filename: str, detail: str):
+            if filename in failed_documents:
+                return
+            failed_documents.add(filename)
+            with self.lock:
+                self.failed_files = len(failed_documents)
+            run_errors.append(f"{filename}: {detail}")
+
+        def mark_queued_documents_failed(detail: str):
+            queued_ids = {item["document_id"] for item in chunk_queue}
+            for queued_id in queued_ids:
+                progress = chunk_progress.get(queued_id)
+                if progress is not None:
+                    mark_document_failed(progress["filename"], detail)
 
         # Establish unified MySQL connection
         mysql_conn = get_mysql_connection()
@@ -339,6 +373,7 @@ class IngestManager:
                 print(f"[INGEST] Removed deleted source document '{filename}'.")
             except Exception as exc:
                 mysql_conn.rollback()
+                mark_document_failed(filename, f"reconciliation failed: {exc}")
                 print(
                     f"[Warning] Preserved deleted-source metadata for '{filename}' "
                     f"because storage cleanup failed: {exc}"
@@ -352,13 +387,14 @@ class IngestManager:
             print(f"   [INGEST] Flushing batch of {len(chunk_queue)} chunks to Ollama & Infinity DB...")
             chunk_texts = [item["content"] for item in chunk_queue]
             embeddings = get_embeddings_batch(chunk_texts, model=embedding_model)
+            if len(embeddings) != len(chunk_queue) or any(
+                embedding is None for embedding in embeddings
+            ):
+                raise RuntimeError("Embedding batch returned incomplete results.")
             
             infinity_batch = []
             for idx, item in enumerate(chunk_queue):
                 emb = embeddings[idx] if idx < len(embeddings) else None
-                if emb is None:
-                    print(f"      [Warning] Failed to generate embedding for chunk {item['chunk_index']} of document '{item['document_title']}'. Skipping.")
-                    continue
                 infinity_batch.append({
                     "document_id": item["document_id"],
                     "chunk_index": item["chunk_index"],
@@ -394,16 +430,14 @@ class IngestManager:
                     if doc_id in chunk_progress:
                         chunk_progress[doc_id]["flushed"] += 1
                         if chunk_progress[doc_id]["flushed"] == chunk_progress[doc_id]["total"]:
-                            try:
-                                print(f"   [INGEST] Document ID {doc_id} completely indexed. Committing content_hash to MySQL...")
-                                cursor.execute(
-                                    "UPDATE documents SET content_hash = %s, status = 'indexed', "
-                                    "indexed_at = CURRENT_TIMESTAMP WHERE id = %s",
-                                    (chunk_progress[doc_id]["hash"], doc_id)
-                                )
-                                mysql_conn.commit()
-                            except Exception as db_err:
-                                print(f"      [Warning] Failed to commit content_hash for document ID {doc_id}: {db_err}")
+                            print(f"   [INGEST] Document ID {doc_id} completely indexed. Committing content_hash to MySQL...")
+                            cursor.execute(
+                                "UPDATE documents SET content_hash = %s, status = 'indexed', "
+                                "indexed_at = CURRENT_TIMESTAMP WHERE id = %s",
+                                (chunk_progress[doc_id]["hash"], doc_id)
+                            )
+                            mysql_conn.commit()
+                            mark_document_success(chunk_progress[doc_id]["filename"])
             
             chunk_queue.clear()
             
@@ -475,9 +509,7 @@ class IngestManager:
                         )
                         mysql_conn.commit()
                         print("   -> Unchanged. Skipping.")
-                        doc_success_count += 1
-                        with self.lock:
-                            self.processed_files = doc_success_count
+                        mark_document_success(filename)
                         continue
                     
                     # File exists but hash differs or rebuild is forced. Clean old chunks.
@@ -598,7 +630,8 @@ class IngestManager:
                 chunk_progress[doc_id] = {
                     "total": chunk_count,
                     "flushed": 0,
-                    "hash": file_hash
+                    "hash": file_hash,
+                    "filename": filename,
                 }
                 
                 if chunk_count == 0:
@@ -609,6 +642,7 @@ class IngestManager:
                         (file_hash, doc_id)
                     )
                     mysql_conn.commit()
+                    mark_document_success(filename)
                 
                 # D. Add chunks to global queue and flush when threshold reached
                 for chunk_idx, (head, chunk_text) in enumerate(chunks):
@@ -629,16 +663,16 @@ class IngestManager:
                     })
                     
                     if len(chunk_queue) >= 64:
-                        flush_chunk_queue()
-                    
-                doc_success_count += 1
-                
-                with self.lock:
-                    self.processed_files = doc_success_count
+                        try:
+                            flush_chunk_queue()
+                        except Exception as exc:
+                            mark_queued_documents_failed(f"chunk batch failed: {exc}")
+                            raise
                     
             except Exception as e:
                 print(f"   [ERROR] Failed to ingest '{filename}': {e}")
                 mysql_conn.rollback()
+                mark_document_failed(filename, str(e))
                 if doc_id:
                     try:
                         cursor.execute(
@@ -648,33 +682,57 @@ class IngestManager:
                         mysql_conn.commit()
                     except Exception:
                         mysql_conn.rollback()
+                if chunk_queue:
+                    break
                 
         # E. Flush any remaining chunks in the queue
-        if chunk_queue and self.status != "cancelled":
+        if self.cancel_event.is_set():
+            print("[INGEST] Ingestion cancelled by user request.")
+            with self.lock:
+                self.status = "cancelled"
+                self.error_message = "Cancelled by user request."
+        if chunk_queue and self.status != "cancelled" and not run_errors:
             try:
                 flush_chunk_queue()
             except Exception as e:
-                print(f"   [ERROR] Failed to flush final chunk queue: {e}")
+                detail = f"Failed to flush final chunk queue: {e}"
+                print(f"   [ERROR] {detail}")
+                mark_queued_documents_failed(detail)
                 
         cursor.close()
         mysql_conn.close()
 
+        if self.status == "cancelled":
+            print(
+                f"[INGEST] Cancelled after processing {doc_success_count}/"
+                f"{len(raw_documents)} files; source cursor was preserved."
+            )
+            return
+
+        if run_errors:
+            raise RuntimeError("Ingestion failed: " + "; ".join(run_errors))
+
         sync_conn = get_mysql_connection()
         sync_cursor = sync_conn.cursor()
-        if next_cursor:
-            connector_config["cursor"] = next_cursor
-            sync_cursor.execute(
-                "UPDATE sources SET config = %s, last_synced_at = CURRENT_TIMESTAMP WHERE id = %s",
-                (json.dumps(connector_config), source["id"]),
-            )
-        else:
-            sync_cursor.execute(
-                "UPDATE sources SET last_synced_at = CURRENT_TIMESTAMP WHERE id = %s",
-                (source["id"],),
-            )
-        sync_conn.commit()
-        sync_cursor.close()
-        sync_conn.close()
+        try:
+            if next_cursor:
+                connector_config["cursor"] = next_cursor
+                sync_cursor.execute(
+                    "UPDATE sources SET config = %s, last_synced_at = CURRENT_TIMESTAMP WHERE id = %s",
+                    (json.dumps(connector_config), source["id"]),
+                )
+            else:
+                sync_cursor.execute(
+                    "UPDATE sources SET last_synced_at = CURRENT_TIMESTAMP WHERE id = %s",
+                    (source["id"],),
+                )
+            sync_conn.commit()
+        except Exception:
+            sync_conn.rollback()
+            raise
+        finally:
+            sync_cursor.close()
+            sync_conn.close()
         
         with self.lock:
             if self.status != "cancelled":

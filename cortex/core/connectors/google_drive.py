@@ -192,10 +192,10 @@ class GoogleDriveConnector(BaseConnector):
 
     def scan(self) -> list[RawDocument]:
         if self.is_full_snapshot:
-            items, folder_ids = self._list_folder()
-            self.config["folder_ids"] = sorted(folder_ids)
             token = self.service.changes().getStartPageToken().execute()
             self.next_cursor = token["startPageToken"]
+            items, folder_ids = self._list_folder()
+            self.config["folder_ids"] = sorted(folder_ids)
         else:
             items, _ = self._changes()
         return self._documents(items)
