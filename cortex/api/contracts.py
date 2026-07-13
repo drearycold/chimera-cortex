@@ -28,6 +28,7 @@ def api_reader_qa_contract():
             "response_locale": "Optional response_locale is a validated BCP 47 tag applied only to answer generation.",
             "query_only_compatibility": "When retrieval_query is omitted, query intentionally drives both retrieval and generation for generic chat clients.",
             "locale_omission": "When response_locale is omitted, generation applies no additional locale constraint.",
+            "reader_selection_target": "A non-empty external context with kind=reader_selection is the exact generation target; query remains the task and other external contexts remain supporting evidence.",
             "context_compaction": "Nearby selected chunks are returned as one expanded evidence window with matched_chunks preserving each hit and locator.",
             "metadata_boundary": "Cortex does not interpret Calibre or reader-specific metadata.",
         },

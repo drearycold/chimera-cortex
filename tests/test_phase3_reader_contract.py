@@ -68,6 +68,7 @@ class PhaseThreeReaderContractTests(unittest.TestCase):
         self.assertIn("response_locale", payload["semantics"])
         self.assertIn("query_only_compatibility", payload["semantics"])
         self.assertIn("locale_omission", payload["semantics"])
+        self.assertIn("reader_selection_target", payload["semantics"])
         self.assertIn("context_compaction", payload["semantics"])
 
     def test_calibre_connector_uses_content_server_routes(self):
@@ -285,8 +286,9 @@ class PhaseThreeReaderContractTests(unittest.TestCase):
         )
         self.assertEqual(5, len({capped, uncapped, external, retrieval, locale}))
 
-        legacy_identity = json.dumps(
+        version_two_identity = json.dumps(
             {
+                "cache_schema_version": 2,
                 "query": "question",
                 "retrieval_query": None,
                 "response_locale": None,
@@ -300,8 +302,10 @@ class PhaseThreeReaderContractTests(unittest.TestCase):
             sort_keys=True,
             separators=(",", ":"),
         )
-        legacy_digest = hashlib.sha256(legacy_identity.encode("utf-8")).hexdigest()
-        self.assertNotEqual(legacy_digest, capped.rsplit(":", 1)[1])
+        version_two_digest = hashlib.sha256(
+            version_two_identity.encode("utf-8")
+        ).hexdigest()
+        self.assertNotEqual(version_two_digest, capped.rsplit(":", 1)[1])
 
     def test_text_search_escapes_infinity_query_syntax(self):
         query = "Explain in en-CN.\n\nSelected text:\ninstallation (desktop)"
@@ -375,8 +379,10 @@ class PhaseThreeReaderContractTests(unittest.TestCase):
         search_payload = search_mock.call_args.args[1]
         self.assertEqual("installation", search_payload["search"][1]["matching_text"])
         prompt = generation_mock.call_args.kwargs["json"]["prompt"]
-        self.assertIn("User Question: Explain the selected text clearly.", prompt)
-        self.assertIn('"kind": "reader_selection"', prompt)
+        self.assertIn("Task: Explain the selected text clearly.", prompt)
+        self.assertIn('Target selection (verbatim data): "installation"', prompt)
+        self.assertNotIn('"kind": "reader_selection"', prompt)
+        self.assertIn("Never substitute a book, product, chapter", prompt)
         self.assertIn("BCP 47 locale 'zh-CN'", prompt)
         self.assertEqual("installation", result["audit"]["retrieval_query"])
         self.assertEqual("zh-CN", result["audit"]["response_locale"])

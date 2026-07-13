@@ -18,6 +18,7 @@ from cortex.core.kb_config import (
     default_generation_config,
     default_ingest_config,
 )
+from cortex.core.prompting import build_generation_prompt
 from cortex.core.rag import (
     allocate_query_quotas,
     build_context_windows,
@@ -35,7 +36,7 @@ router = APIRouter(prefix="/api", tags=["Chat"])
 logger = logging.getLogger("uvicorn.error")
 
 _INFINITY_TEXT_RESERVED = re.compile(r'([+\-=&|><!(){}\[\]^"~*?:\\/])')
-_CHAT_CACHE_SCHEMA_VERSION = 2
+_CHAT_CACHE_SCHEMA_VERSION = 3
 
 class ChatRequest(BaseModel):
     query: str = Field(min_length=1, max_length=10000)
@@ -620,6 +621,7 @@ def _run_chat(req: ChatRequest, knowledge_base: dict | None = None):
 
     # 5. Generate RAG Response via Ollama (qwen3:8b)
     t_gen_start = time.time()
+    context_str = None
     if contexts:
         unique_contents = []
         seen_contents = set()
@@ -628,26 +630,16 @@ def _run_chat(req: ChatRequest, knowledge_base: dict | None = None):
                 seen_contents.add(c['content'])
                 unique_contents.append(f"--- SOURCE: {c['filename']} ---\n{c['content']}")
         context_str = "\n\n".join(unique_contents)
-        base_prompt = generation_config.get(
+    full_prompt = build_generation_prompt(
+        base_prompt=generation_config.get(
             "system_prompt",
             default_generation_config()["system_prompt"],
-        )
-        system_prompt = f"{base_prompt}\n\nHere is the retrieved context:\n{context_str}"
-    else:
-        system_prompt = (
-            f"{generation_config.get('system_prompt', default_generation_config()['system_prompt'])} "
-            "No matching document context was found in this knowledge base."
-        )
-
-    if req.external_contexts:
-        external_context_text = json.dumps(req.external_contexts, ensure_ascii=False)
-        system_prompt += f"\n\nAdditional external evidence:\n{external_context_text}"
-    if req.response_locale:
-        system_prompt += (
-            "\n\nWrite the answer in the language identified by the BCP 47 locale "
-            f"'{req.response_locale}'."
-        )
-    full_prompt = f"System: {system_prompt}\n\nUser Question: {query}\n\nAnswer:"
+        ),
+        query=query,
+        retrieved_context=context_str,
+        external_contexts=req.external_contexts,
+        response_locale=req.response_locale,
+    )
     
     try:
         generation_response = httpx.post(
