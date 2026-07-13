@@ -2,7 +2,10 @@ import os
 import re
 import math
 import json
+from typing import Any
+
 import httpx
+
 from .config import (
     OLLAMA_EMBED_URL, OLLAMA_EMBED_MODEL, RERANKER_URL,
     OLLAMA_GENERATE_URL, OLLAMA_GEN_MODEL
@@ -347,6 +350,90 @@ def select_context_window(configured_window: int, query_count: int) -> int:
     return safe_window
 
 
+def build_context_windows(
+    contexts: list[dict[str, Any]],
+    context_window: int,
+) -> list[dict[str, Any]]:
+    """Group selected child chunks into unique contiguous evidence windows."""
+    safe_window = max(0, context_window)
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    standalone: list[dict[str, Any]] = []
+    for context in contexts:
+        document_id = context.get("document_id")
+        chunk_index = context.get("chunk_index")
+        if document_id is None or chunk_index is None:
+            standalone.append(
+                {
+                    "document_id": document_id,
+                    "start": chunk_index,
+                    "end": chunk_index,
+                    "matches": [context],
+                }
+            )
+            continue
+        grouped.setdefault(int(document_id), []).append(context)
+
+    windows: list[dict[str, Any]] = []
+    for document_id in sorted(grouped):
+        ranges = [
+            (
+                max(0, int(context["chunk_index"]) - safe_window),
+                int(context["chunk_index"]) + safe_window,
+                context,
+            )
+            for context in grouped[document_id]
+        ]
+        ranges.sort(key=lambda item: (item[0], item[1]))
+        for start, end, context in ranges:
+            if (
+                windows
+                and windows[-1]["document_id"] == document_id
+                and start <= windows[-1]["end"] + 1
+            ):
+                windows[-1]["end"] = max(windows[-1]["end"], end)
+                windows[-1]["matches"].append(context)
+            else:
+                windows.append(
+                    {
+                        "document_id": document_id,
+                        "start": start,
+                        "end": end,
+                        "matches": [context],
+                    }
+                )
+    windows.extend(standalone)
+    return windows
+
+
+def merge_chunk_contents(contents: list[str]) -> str:
+    """Merge ordered chunks while removing only overlaps verified at boundaries."""
+    if not contents:
+        return ""
+
+    merged = contents[0]
+    for current in contents[1:]:
+        overlap_length = 0
+        max_overlap = min(len(merged), len(current), 250)
+        for candidate_length in range(max_overlap, 10, -1):
+            if merged[-candidate_length:] == current[:candidate_length]:
+                overlap_length = candidate_length
+                break
+        if overlap_length:
+            merged += current[overlap_length:]
+            continue
+
+        first_block, separator, remainder = current.partition("\n\n")
+        if first_block.startswith("... "):
+            overlap_text = first_block[4:].strip()
+            if overlap_text and merged.rstrip().endswith(overlap_text):
+                if separator and remainder:
+                    merged = merged.rstrip() + "\n\n" + remainder
+                continue
+
+        merged += "\n\n" + current
+    return merged
+
+
 def _quote_filter_value(value: str) -> str:
     if not value or len(value) > 512 or any(ord(char) < 32 for char in value):
         raise ValueError("Retrieval filter values must be 1-512 printable characters.")
@@ -442,22 +529,7 @@ def fetch_and_merge_chunk_range(
         if not parsed_chunks:
             return ""
             
-        # Merge overlapping text
-        merged = parsed_chunks[0]["content"]
-        for i in range(1, len(parsed_chunks)):
-            curr = parsed_chunks[i]["content"]
-            overlap_found = False
-            # Look for overlap up to 250 characters
-            for overlap_len in range(min(len(merged), len(curr), 250), 10, -1):
-                if merged[-overlap_len:] == curr[:overlap_len]:
-                    merged += curr[overlap_len:]
-                    overlap_found = True
-                    break
-            if not overlap_found:
-                # Fallback: simple concatenate with newline separation
-                merged += "\n\n" + curr
-                
-        return merged
+        return merge_chunk_contents([chunk["content"] for chunk in parsed_chunks])
         
     except Exception as exc:
         raise RetrievalBackendError(

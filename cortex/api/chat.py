@@ -20,6 +20,7 @@ from cortex.core.kb_config import (
 )
 from cortex.core.rag import (
     allocate_query_quotas,
+    build_context_windows,
     build_retrieval_filter_expression,
     decompose_query,
     fetch_and_merge_chunk_range,
@@ -34,6 +35,7 @@ router = APIRouter(prefix="/api", tags=["Chat"])
 logger = logging.getLogger("uvicorn.error")
 
 _INFINITY_TEXT_RESERVED = re.compile(r'([+\-=&|><!(){}\[\]^"~*?:\\/])')
+_CHAT_CACHE_SCHEMA_VERSION = 2
 
 class ChatRequest(BaseModel):
     query: str = Field(min_length=1, max_length=10000)
@@ -209,6 +211,7 @@ def build_chat_cache_key(
 ) -> str:
     identity = json.dumps(
         {
+            "cache_schema_version": _CHAT_CACHE_SCHEMA_VERSION,
             "query": query,
             "retrieval_query": retrieval_query,
             "response_locale": response_locale,
@@ -522,40 +525,38 @@ def _run_chat(req: ChatRequest, knowledge_base: dict | None = None):
     contexts.sort(key=lambda x: x.get("distance", 0.0), reverse=True)
     contexts = contexts[:top_k_contexts]
     
-    # 4.5. On-The-Fly Context Expansion (Parent-Child Chunking)
-    doc_to_chunks: dict[Any, list[Any]] = {}
-    for c in contexts:
-        doc_id = c.get("document_id")
-        if doc_id is not None:
-            if doc_id not in doc_to_chunks:
-                doc_to_chunks[doc_id] = []
-            doc_to_chunks[doc_id].append(c.get("chunk_index"))
-            
-    doc_ranges: dict[Any, list[list[int]]] = {}
-    for doc_id, chunk_indices in doc_to_chunks.items():
-        ranges = sorted(
-            [
-                [idx - context_window, idx + context_window]
-                for idx in chunk_indices
-                if idx is not None
-            ]
+    # 4.5. Expand selected child chunks into unique evidence windows.
+    expanded_contexts: list[dict[str, Any]] = []
+    for window in build_context_windows(contexts, context_window):
+        matches = window["matches"]
+        representative = max(
+            matches,
+            key=lambda match: match.get("distance", 0.0),
         )
-        merged_ranges: list[list[int]] = []
-        for chunk_range in ranges:
-            if not merged_ranges:
-                merged_ranges.append(chunk_range)
-            else:
-                last_r = merged_ranges[-1]
-                if chunk_range[0] <= last_r[1]:
-                    last_r[1] = max(last_r[1], chunk_range[1])
-                else:
-                    merged_ranges.append(chunk_range)
-        doc_ranges[doc_id] = merged_ranges
-        
-    doc_range_texts: dict[Any, list[tuple[int, int, str]]] = {}
-    for doc_id, merged_ranges in doc_ranges.items():
-        doc_range_texts[doc_id] = []
-        for start, end in merged_ranges:
+        expanded = dict(representative)
+        expanded["child_content"] = representative["content"]
+        expanded["window_start_chunk"] = window["start"]
+        expanded["window_end_chunk"] = window["end"]
+        expanded["matched_chunks"] = [
+            {
+                "chunk_index": match.get("chunk_index"),
+                "external_id": match.get("external_id"),
+                "source_key": match.get("source_key"),
+                "servant_name": match.get("servant_name"),
+                "ordinal": match.get("ordinal"),
+                "locator": match.get("locator"),
+                "sub_query": match.get("sub_query"),
+                "distance": match.get("distance"),
+                "rerank_logit": match.get("rerank_logit"),
+                "rerank_score": match.get("rerank_score"),
+            }
+            for match in matches
+        ]
+
+        doc_id = window["document_id"]
+        start = window["start"]
+        end = window["end"]
+        if doc_id is not None and start is not None and end is not None:
             try:
                 text = fetch_and_merge_chunk_range(
                     doc_id,
@@ -582,18 +583,16 @@ def _run_chat(req: ChatRequest, knowledge_base: dict | None = None):
                     status_code=503,
                     detail=f"Retrieval backend error: {exc}",
                 ) from exc
-            doc_range_texts[doc_id].append((start, end, text))
-            
-    for c in contexts:
-        doc_id = c.get("document_id")
-        chunk_idx = c.get("chunk_index")
-        c["child_content"] = c["content"]  # preserve original child content
-        if doc_id is not None and chunk_idx is not None:
-            for start, end, text in doc_range_texts.get(doc_id, []):
-                if start <= chunk_idx <= end and text:
-                    c["content"] = text
-                    break
-    
+            if text:
+                expanded["content"] = text
+        expanded_contexts.append(expanded)
+
+    contexts = sorted(
+        expanded_contexts,
+        key=lambda context: context.get("distance", 0.0),
+        reverse=True,
+    )
+
     for i, c in enumerate(contexts):
         second_stage_candidates.append({
             "document_id": c.get("document_id"),
@@ -606,6 +605,9 @@ def _run_chat(req: ChatRequest, knowledge_base: dict | None = None):
             "source_key": c.get("source_key"),
             "ordinal": c.get("ordinal"),
             "locator": c.get("locator"),
+            "window_start_chunk": c.get("window_start_chunk"),
+            "window_end_chunk": c.get("window_end_chunk"),
+            "matched_chunks": c.get("matched_chunks", []),
             "first_stage_score": next((f["score"] for f in first_stage_candidates if f["filename"] == c["filename"] and f["chunk_index"] == c["chunk_index"]), c["distance"]),
             "first_stage_rank": next((f["rank"] for f in first_stage_candidates if f["filename"] == c["filename"] and f["chunk_index"] == c["chunk_index"]), i + 1),
             "rerank_logit": c.get("rerank_logit"),
@@ -668,24 +670,25 @@ def _run_chat(req: ChatRequest, knowledge_base: dict | None = None):
     citations = []
     seen_citations = set()
     for context in contexts:
-        if not context.get("external_id"):
-            continue
-        citation_key = (
-            context["external_id"],
-            context.get("ordinal"),
-            json.dumps(context.get("locator"), sort_keys=True),
-        )
-        if citation_key in seen_citations:
-            continue
-        seen_citations.add(citation_key)
-        citations.append(
-            {
-                "external_id": context["external_id"],
-                "title": context["servant_name"],
-                "ordinal": context.get("ordinal"),
-                "locator": context.get("locator"),
-            }
-        )
+        for match in context.get("matched_chunks", [context]):
+            if not match.get("external_id"):
+                continue
+            citation_key = (
+                match["external_id"],
+                match.get("ordinal"),
+                json.dumps(match.get("locator"), sort_keys=True),
+            )
+            if citation_key in seen_citations:
+                continue
+            seen_citations.add(citation_key)
+            citations.append(
+                {
+                    "external_id": match["external_id"],
+                    "title": match.get("servant_name") or context["servant_name"],
+                    "ordinal": match.get("ordinal"),
+                    "locator": match.get("locator"),
+                }
+            )
 
     response_data = {
         "answer": answer,

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import unittest
 from pathlib import Path
@@ -24,8 +25,10 @@ from cortex.core.connectors import CalibreConnector
 from cortex.core.external_documents import build_segment_chunks
 from cortex.core.rag import (
     RetrievalBackendError,
+    build_context_windows,
     build_retrieval_filter_expression,
     fetch_and_merge_chunk_range,
+    merge_chunk_contents,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -65,6 +68,7 @@ class PhaseThreeReaderContractTests(unittest.TestCase):
         self.assertIn("response_locale", payload["semantics"])
         self.assertIn("query_only_compatibility", payload["semantics"])
         self.assertIn("locale_omission", payload["semantics"])
+        self.assertIn("context_compaction", payload["semantics"])
 
     def test_calibre_connector_uses_content_server_routes(self):
         search = (FIXTURES / "calibre_content_server/search.json").read_bytes()
@@ -162,6 +166,47 @@ class PhaseThreeReaderContractTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             ExternalDocument.model_validate(payload)
 
+    def test_context_windows_merge_overlapping_and_contiguous_hits(self):
+        contexts = [
+            {"document_id": 423, "chunk_index": 8, "distance": 0.96},
+            {"document_id": 423, "chunk_index": 10, "distance": 0.20},
+            {"document_id": 423, "chunk_index": 11, "distance": 0.10},
+            {"document_id": 7, "chunk_index": 0, "distance": 0.80},
+            {"document_id": 423, "chunk_index": 30, "distance": 0.70},
+        ]
+
+        windows = build_context_windows(contexts, context_window=1)
+
+        self.assertEqual(
+            [(7, 0, 1), (423, 7, 12), (423, 29, 31)],
+            [
+                (window["document_id"], window["start"], window["end"])
+                for window in windows
+            ],
+        )
+        self.assertEqual(
+            [8, 10, 11],
+            [match["chunk_index"] for match in windows[1]["matches"]],
+        )
+
+    def test_chunk_merge_removes_only_verified_ellipsis_overlap(self):
+        verified = merge_chunk_contents(
+            [
+                "Installation ends when you configure calibre.",
+                "... configure calibre.\n\n[Guide - Next] Choose a device.",
+            ]
+        )
+        unverified = merge_chunk_contents(
+            [
+                "Installation ends here.",
+                "... configure calibre.\n\n[Guide - Next] Choose a device.",
+            ]
+        )
+
+        self.assertEqual(1, verified.count("configure calibre."))
+        self.assertIn("[Guide - Next] Choose a device.", verified)
+        self.assertIn("... configure calibre.", unverified)
+
     def test_filter_expression_applies_per_document_caps_and_source_union(self):
         expression = build_retrieval_filter_expression(
             {
@@ -239,6 +284,24 @@ class PhaseThreeReaderContractTests(unittest.TestCase):
             response_locale="zh-CN",
         )
         self.assertEqual(5, len({capped, uncapped, external, retrieval, locale}))
+
+        legacy_identity = json.dumps(
+            {
+                "query": "question",
+                "retrieval_query": None,
+                "response_locale": None,
+                "retrieval_filter": {
+                    "documents": [{"external_id": "opaque-a", "max_ordinal": 126}]
+                },
+                "external_contexts": [],
+                "top_k": 10,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        legacy_digest = hashlib.sha256(legacy_identity.encode("utf-8")).hexdigest()
+        self.assertNotEqual(legacy_digest, capped.rsplit(":", 1)[1])
 
     def test_text_search_escapes_infinity_query_syntax(self):
         query = "Explain in en-CN.\n\nSelected text:\ninstallation (desktop)"
@@ -336,6 +399,91 @@ class PhaseThreeReaderContractTests(unittest.TestCase):
         self.assertNotIn("BCP 47 locale", legacy_prompt)
         self.assertEqual("installation", legacy_result["audit"]["retrieval_query"])
         self.assertIsNone(legacy_result["audit"]["response_locale"])
+
+    @patch("cortex.api.chat.fetch_and_merge_chunk_range", return_value="Expanded evidence")
+    @patch("cortex.api.chat.httpx.post")
+    @patch("cortex.api.chat.search_infinity")
+    @patch("cortex.api.chat.get_embedding", return_value=[0.1, 0.2])
+    @patch("cortex.api.chat.get_mysql_connection")
+    @patch("cortex.api.chat.get_redis_client")
+    def test_chat_compacts_nearby_hits_into_one_cached_evidence_window(
+        self,
+        redis_mock,
+        mysql_mock,
+        _embedding_mock,
+        search_mock,
+        generation_mock,
+        expansion_mock,
+    ):
+        redis_client = Mock()
+        redis_client.get.return_value = None
+        redis_mock.return_value = redis_client
+        cursor = mysql_mock.return_value.cursor.return_value
+        cursor.fetchone.return_value = ("guide.json",)
+        search_mock.return_value = [
+            {
+                "document_id": 423,
+                "chunk_index": chunk_index,
+                "content": f"Child {chunk_index}",
+                "document_title": "Quick Start Guide",
+                "external_id": "book-1",
+                "source_key": "library-1",
+                "segment_ordinal": 4 if chunk_index < 10 else 5,
+                "segment_locator": json.dumps(
+                    {"type": "epub_href", "value": f"chapter-{chunk_index // 10}"}
+                ),
+                "SCORE": 1.0 - ((chunk_index - 8) * 0.1),
+            }
+            for chunk_index in (8, 9, 10, 11)
+        ]
+        generation_response = Mock()
+        generation_response.json.return_value = {"response": "Grounded answer"}
+        generation_mock.return_value = generation_response
+        knowledge_base = {
+            "slug": "dsreader-default",
+            "vector_table": "chunks_dsreader_default",
+            "ingest_config": {
+                "embedding": {"model": "test-embedding"},
+                "search": {"context_window": 1},
+            },
+            "generation_config": {
+                "model": "test-generation",
+                "temperature": 0.0,
+                "max_tokens": 64,
+                "top_k_contexts": 4,
+                "query_rewrite": {"enabled": False},
+                "reranker": {"enabled": False},
+            },
+        }
+
+        result = _run_chat(ChatRequest(query="installation processes"), knowledge_base)
+
+        expansion_mock.assert_called_once_with(
+            423,
+            7,
+            12,
+            vector_table="chunks_dsreader_default",
+            retrieval_filter=None,
+        )
+        self.assertEqual(1, len(result["contexts"]))
+        context = result["contexts"][0]
+        self.assertEqual(8, context["chunk_index"])
+        self.assertEqual(
+            (7, 12),
+            (context["window_start_chunk"], context["window_end_chunk"]),
+        )
+        self.assertEqual(
+            [8, 9, 10, 11],
+            [match["chunk_index"] for match in context["matched_chunks"]],
+        )
+        self.assertEqual(2, len(result["citations"]))
+        self.assertEqual(1, len(result["audit"]["second_stage_candidates"]))
+        prompt = generation_mock.call_args.kwargs["json"]["prompt"]
+        self.assertEqual(1, prompt.count("Expanded evidence"))
+
+        cached_payload = json.loads(redis_client.setex.call_args.args[2])
+        self.assertEqual(1, len(cached_payload["contexts"]))
+        self.assertEqual(1, len(cached_payload["audit"]["second_stage_candidates"]))
 
     @patch("cortex.api.chat.httpx.request")
     def test_indexed_content_is_recalled_with_and_without_filter(self, request_mock):
